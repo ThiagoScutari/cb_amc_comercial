@@ -1,0 +1,49 @@
+# Compose de DEV — sobe Postgres + app com as portas FIXAS do PORT-REGISTRY.
+# (Evolution API / porta host 8103 entra na Fase 8; rede Traefik/labels só na VPS.)
+# Nomes de container com prefixo do projeto (§3.2) — nunca genéricos.
+
+services:
+  cb_amc_comercial_db:
+    image: postgres:15
+    container_name: cb_amc_comercial_db
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5438:5432"          # FIXA (PORT-REGISTRY) — host:container
+    volumes:
+      - cb_amc_comercial_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  cb_amc_comercial_app:
+    build: .
+    container_name: cb_amc_comercial_app
+    restart: unless-stopped
+    env_file: .env
+    environment:             # explícito (§3.2): o Docker não adivinha as variáveis
+      DATABASE_URL: ${DATABASE_URL}        # host = cb_amc_comercial_db, NÃO localhost
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      AGENT_MODEL: ${AGENT_MODEL}
+      ROUTER_MODEL: ${ROUTER_MODEL}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY}
+      ELEVENLABS_VOICE_ID: ${ELEVENLABS_VOICE_ID}
+      EVOLUTION_API_URL: ${EVOLUTION_API_URL}
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      EVOLUTION_INSTANCE: ${EVOLUTION_INSTANCE}
+      LOG_LEVEL: ${LOG_LEVEL}
+    ports:
+      - "8005:8000"          # FIXA (PORT-REGISTRY) — host:container
+    depends_on:
+      cb_amc_comercial_db:
+        condition: service_healthy
+
+volumes:
+  cb_amc_comercial_pgdata:   # volume nomeado (persistência do Postgres)

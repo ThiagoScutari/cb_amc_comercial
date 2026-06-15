@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Instalar dependências (runtime + dev)
+        run: pip install -r requirements-dev.txt
+
+      # Ordem: falha rápido no barato (lint -> SAST -> deps -> testes).
+      - name: Lint (ruff)
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: SAST (bandit)
+        run: bandit -r app/
+
+      - name: Vulnerabilidades em dependências (pip-audit)
+        run: pip-audit -r requirements.txt
+
+      - name: Testes + cobertura (pytest)
+        run: pytest --cov=app --cov-fail-under=70

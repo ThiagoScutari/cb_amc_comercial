@@ -1,0 +1,16 @@
+# Runtime — versões pinadas (espelham o ambiente de dev p/ CI reproduzível).
+# Camadas: web (FastAPI), LLM (Claude), STT (OpenAI/Whisper), dados (SQLAlchemy+psycopg3).
+fastapi==0.136.1
+uvicorn[standard]==0.34.0
+anthropic==0.96.0
+openai==2.32.0
+pydantic==2.10.3
+pydantic-settings==2.14.0
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3          # driver Postgres (psycopg3, uso síncrono)
+httpx==0.28.1
+jinja2==3.1.4
+
+# Itens adiados (entram na fase correspondente, p/ evitar peso/CVE prematuro):
+#   python-multipart  -> Fase 8 (upload no webhook Evolution)
+#   elevenlabs        -> Fase 7 (TTS; onboarding fornece chave/voice_id)

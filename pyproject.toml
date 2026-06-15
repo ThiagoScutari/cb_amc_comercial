@@ -1,0 +1,36 @@
+[project]
+name = "cb-amc-comercial"
+version = "0.1.0"
+description = "Chatbot de atendimento comercial B2B da AMC Têxtil (WhatsApp, NLP, voz)."
+requires-python = ">=3.12"
+
+# Dependências reais ficam em requirements.txt / requirements-dev.txt (pinadas).
+# Este bloco existe só para metadados e config das ferramentas abaixo.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["app", "tests", "scripts"]
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes, I isort, UP pyupgrade, B bugbear.
+select = ["E", "W", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=70"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["app/__init__.py"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+warn_unused_ignores = true
+
+[tool.bandit]
+exclude_dirs = ["tests"]
