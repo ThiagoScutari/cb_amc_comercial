@@ -1,0 +1,50 @@
+# ===== Segredos — NUNCA versionar =====
+.env
+.env.*
+!.env.example
+
+# ===== Permissões locais do Claude Code =====
+.claude/settings.local.json
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ===== Ambientes virtuais =====
+venv/
+.venv/
+env/
+
+# ===== Testes / cobertura =====
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Dados em runtime =====
+data/
+postgres_data/
+
+# ===== Banco / dumps locais =====
+*.sqlite3
+*.db
+
+# ===== Windows / SO =====
+desktop.ini
+Thumbs.db
+$RECYCLE.BIN/
+
+# ===== macOS =====
+.DS_Store
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
