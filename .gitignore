@@ -28,9 +28,9 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# ===== Dados em runtime =====
-data/
-postgres_data/
+# ===== Dados em runtime (apenas na RAIZ — não casar app/data/) =====
+/data/
+/postgres_data/
 
 # ===== Banco / dumps locais =====
 *.sqlite3
