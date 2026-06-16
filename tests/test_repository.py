@@ -76,9 +76,19 @@ def test_parse_ref_ancora_direita_8dig():
     assert parse_ref_produto("80104766") == ("008", "01", "04766")
 
 
+def test_parse_ref_tipo_3_digitos():
+    # 10 díg (teto): tipo de 3 díg sai inteiro, sem perder o zfill nem truncar.
+    assert parse_ref_produto("3440103413") == ("344", "01", "03413")
+
+
 def test_parse_ref_malformado_sem_excecao():
     # < 7 dígitos: derivados null, sem exceção (degrada)
     assert parse_ref_produto("123") == (None, None, None)
+
+
+def test_parse_ref_acima_do_teto():
+    # > 10 díg (teto absoluto = 3+2+5): malformado -> null (não inventa tipo de 4 díg).
+    assert parse_ref_produto("12345678901") == (None, None, None)
 
 
 # --------- clientes ---------

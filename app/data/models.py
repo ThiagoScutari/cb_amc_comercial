@@ -99,9 +99,10 @@ def parse_ref_produto(ref: str | None) -> tuple[str | None, str | None, str | No
         tipo_cod  = ref[:-7] re-padded a 3 díg (zfill)
     Ex.: "80104766" -> ("008", "01", "04766"); "340103413" -> ("034", "01", "03413").
 
-    Ref malformado (não numérico ou < 7 díg) -> (None, None, None), sem exceção.
+    Faixa válida = 7..10 díg (teto absoluto 3+2+5). Fora dela ou não-numérico ->
+    (None, None, None), sem exceção (nunca inventa tipo de 4+ díg).
     """
-    if not ref or not ref.isdigit() or len(ref) < 7:
+    if not ref or not ref.isdigit() or not (7 <= len(ref) <= 10):
         return None, None, None
     return ref[:-7].zfill(3), ref[-7:-5], ref[-5:]
 
