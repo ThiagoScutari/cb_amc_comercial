@@ -18,8 +18,10 @@ from app.agent.orchestrator import (
     _truncar,
 )
 from app.agent.tools import Ferramentas
+from app.data.models import Solicitacao
 from app.data.repository import MockRepository
 from app.data.seed import popular
+from sqlalchemy import select
 
 MODELO = "claude-sonnet-4-6"
 
@@ -225,3 +227,33 @@ def test_truncar_nao_quebra_par_tool():
     ]
     out = _truncar(msgs, max_turnos=1)
     assert out[0]["content"] == "t2"  # corta no último turno de usuário real, não no tool_result
+
+
+# ---------- intake: só registra APÓS confirmação (princípio 7) ----------
+async def test_intake_so_registra_apos_confirmacao(ferramentas):
+    sess = ferramentas.repo.session
+    store = HistoricoMemoria()
+    n0 = len(sess.scalars(select(Solicitacao)).all())  # seed já tem 1 pendente
+    # turno 1: lê o pedido e PERGUNTA (não registra nada)
+    fake1 = FakeAnthropic(
+        [
+            _msg([_tool("t1", "consultar_pedido", {"numero_pedido": 4471})], "tool_use"),
+            _msg([_texto("Pedido 4471: 200 camisetas. Confirma o cancelamento?")], "end_turn"),
+        ]
+    )
+    await Orquestrador(fake1, store, model=MODELO).responder(
+        ferramentas, cliente_id=1, mensagem="cancelar 4471"
+    )
+    assert len(sess.scalars(select(Solicitacao)).all()) == n0  # nada registrado ainda
+
+    # turno 2: cliente confirma -> agora o modelo registra
+    fake2 = FakeAnthropic(
+        [
+            _msg([_tool("t2", "solicitar_cancelamento", {"numero_pedido": 4471})], "tool_use"),
+            _msg([_texto("Registrei sua solicitação. O time retorna por aqui.")], "end_turn"),
+        ]
+    )
+    await Orquestrador(fake2, store, model=MODELO).responder(
+        ferramentas, cliente_id=1, mensagem="sim"
+    )
+    assert len(sess.scalars(select(Solicitacao)).all()) == n0 + 1  # registrado após o "sim"

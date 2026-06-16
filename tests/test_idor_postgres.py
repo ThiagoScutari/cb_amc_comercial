@@ -96,3 +96,22 @@ def test_cliente_acessa_proprio_pedido_com_itens(repo):
 
 def test_catalogo_global_em_postgres(repo):
     assert repo.buscar_produto("camiseta")  # catálogo acessível, sem cliente_id
+
+
+# ---------- IDOR no caminho de ESCRITA (intake) ----------
+def test_idor_cancelamento_de_outro_cliente_nao_registra(repo):
+    # cliente 2 tenta cancelar 4471 (do cliente 1): negado e NADA registrado.
+    n_antes = len(repo.listar_solicitacoes(2))
+    sol = repo.registrar_cancelamento(cliente_id=2, numero_pedido=4471)
+    assert sol is None
+    assert len(repo.listar_solicitacoes(2)) == n_antes
+    repo.session.rollback()
+
+
+def test_cancelamento_proprio_registra(repo):
+    # controle positivo: o dono (cliente 1) consegue registrar.
+    sol = repo.registrar_cancelamento(cliente_id=1, numero_pedido=4471, motivo="teste")
+    assert sol is not None
+    assert sol.cliente_id == 1
+    assert sol.tipo.value == "cancelamento"
+    repo.session.rollback()

@@ -18,7 +18,15 @@ from typing import Protocol
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.data.models import Cliente, Estoque, Pedido, Produto, Solicitacao, StatusPedido
+from app.data.models import (
+    Cliente,
+    Estoque,
+    Pedido,
+    Produto,
+    Solicitacao,
+    StatusPedido,
+    TipoSolicitacao,
+)
 
 
 def normalizar_telefone(raw: str | None) -> str | None:
@@ -54,6 +62,12 @@ class DadosRepository(Protocol):
         self, cliente_id: int, filtro_status: StatusPedido | None = None
     ) -> list[Pedido]: ...
     def listar_solicitacoes(self, cliente_id: int) -> list[Solicitacao]: ...
+
+    # --- ESCRITA (intake): só REGISTRA, NÃO muta pedido/estoque ---
+    def registrar_cancelamento(
+        self, cliente_id: int, numero_pedido: int, motivo: str | None = None
+    ) -> Solicitacao | None: ...
+    def registrar_compra(self, cliente_id: int, itens: list[dict]) -> Solicitacao: ...
 
     # --- CATÁLOGO GLOBAL (compartilhado; SEM cliente_id — não é IDOR) ---
     def buscar_produto(self, texto_busca: str) -> list[Produto]: ...
@@ -145,3 +159,51 @@ class MockRepository:
         return self.session.scalars(
             select(Cliente).where(Cliente.telefone_whatsapp == norm)
         ).one_or_none()
+
+    # --- ESCRITA (intake) ---
+    def registrar_cancelamento(
+        self, cliente_id: int, numero_pedido: int, motivo: str | None = None
+    ) -> Solicitacao | None:
+        # Anti-IDOR de ESCRITA: só registra se o pedido é do cliente da sessão.
+        # Não pertence (ou inexiste) -> None e NADA registrado. NÃO muta o pedido.
+        if self.consultar_pedido(cliente_id, numero_pedido) is None:
+            return None
+        sol = Solicitacao(
+            cliente_id=cliente_id,
+            tipo=TipoSolicitacao.cancelamento,
+            pedido_id=numero_pedido,
+            payload={"motivo": motivo},
+        )
+        self.session.add(sol)
+        self.session.flush()  # atribui id; o request comita (Fase 8) / rollback em erro
+        return sol
+
+    def registrar_compra(self, cliente_id: int, itens: list[dict]) -> Solicitacao:
+        # Compra é pedido do PRÓPRIO cliente (sem recurso cruzado): cliente_id da sessão.
+        # Enriquece com snapshot do produto p/ o humano; sku desconhecido é anotado,
+        # não bloqueia (intake). NÃO toca em estoque.
+        enriquecidos = []
+        for item in itens:
+            sku = item.get("sku")
+            prod = (
+                self.session.scalars(select(Produto).where(Produto.sku == sku)).one_or_none()
+                if sku
+                else None
+            )
+            enriquecidos.append(
+                {
+                    "sku": sku,
+                    "quantidade": item.get("quantidade"),
+                    "produto": prod.produto if prod else None,
+                    "preco_tabela": str(prod.preco_tabela) if prod else None,
+                    "encontrado": prod is not None,
+                }
+            )
+        sol = Solicitacao(
+            cliente_id=cliente_id,
+            tipo=TipoSolicitacao.compra,
+            payload={"itens": enriquecidos},
+        )
+        self.session.add(sol)
+        self.session.flush()
+        return sol
