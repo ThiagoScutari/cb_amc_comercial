@@ -156,12 +156,9 @@ def extrair_ref(detalhe: dict, url: str) -> str | None:
 def normalizar(detalhe: dict, url: str, genero: str, categoria_txt: str) -> list[dict]:
     """Expande 1 produto (1 cor) em N linhas — uma por tamanho (1 linha = 1 SKU)."""
     ref = extrair_ref(detalhe, url)
-    if ref and len(ref) == 9 and ref.isdigit():
-        categoria_cod, marca_cod, ordem = parse_ref_produto(ref)
-        ref_9 = True
-    else:  # degrada: não quebra, marca derivados como nulos, registra
-        categoria_cod = marca_cod = ordem = None
-        ref_9 = False
+    # âncora-direita (v1.8); ref malformado (<7 díg) -> (None, None, None), nunca inventa.
+    tipo_cod, marca_cod, ordem = parse_ref_produto(ref)
+    decodificado = tipo_cod is not None
     preco = parse_preco(detalhe.get("preco"))
     tamanhos = [t for t in (detalhe.get("tamanhos") or []) if t] or [None]
     rows = []
@@ -170,7 +167,7 @@ def normalizar(detalhe: dict, url: str, genero: str, categoria_txt: str) -> list
             {
                 "sku": f"{ref}-{tam}" if (ref and tam) else None,
                 "ref_produto": ref,
-                "categoria_cod": categoria_cod,
+                "tipo_cod": tipo_cod,
                 "marca_cod": marca_cod,
                 "ordem": ordem,
                 "produto": detalhe.get("produto"),
@@ -180,7 +177,7 @@ def normalizar(detalhe: dict, url: str, genero: str, categoria_txt: str) -> list
                 # metadados (fora do modelo Produto) — só p/ transparência da captura:
                 "_genero": detalhe.get("genero") or genero,
                 "_categoria_txt": categoria_txt,
-                "_ref_9digitos": ref_9,
+                "_ref_decodificado": decodificado,
                 "_source_url": url,
             }
         )
@@ -240,14 +237,14 @@ def main() -> None:
 
 
 def _salvar(skus: list[dict]) -> None:
-    com_ref9 = sum(1 for s in skus if s["_ref_9digitos"])
+    decodificados = sum(1 for s in skus if s["_ref_decodificado"])
     produtos = {s["_source_url"] for s in skus}
     meta = {
         "fonte": "scraping colcci.com.br via Firecrawl (API VTEX pública não expõe catálogo)",
         "total_skus": len(skus),
         "total_produtos": len(produtos),
-        "skus_ref_9_digitos": com_ref9,
-        "skus_ref_nao_9": len(skus) - com_ref9,
+        "skus_derivados_preenchidos": decodificados,
+        "skus_malformados": len(skus) - decodificados,
         "sem_preco": sum(1 for s in skus if not s["preco_tabela"]),
         "sem_cor": sum(1 for s in skus if not s["cor"]),
         "sem_tamanho": sum(1 for s in skus if not s["tamanho"]),

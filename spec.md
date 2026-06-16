@@ -166,9 +166,9 @@ Os produtos vêm do catálogo real da **Colcci** (marca da AMC Têxtil — ver 5
 | `id` | int PK | SKU id interno |
 | `sku` | str | código único interno, ex.: `360118439-M` (ref + tamanho) |
 | `ref_produto` | str | **código do produto Colcci** (RefId), ex.: `360118439` (9 díg.) ou `80104766` (8 díg.) |
-| `categoria_cod` | str(2) **nullable** | 2 primeiros dígitos do ref **quando 9 díg.**; `null` p/ refs de 8 díg. |
-| `marca_cod` | str(2) **nullable** | dígitos 3–4 do ref quando 9 díg. (sempre `01`=Colcci); `null` p/ 8 díg. |
-| `ordem` | str(5) **nullable** | dígitos 5–9 quando 9 díg.; `null` p/ 8 díg. |
+| `tipo_cod` | str(3) **nullable** | tipo (peça+gênero) via **âncora-direita**: `ref[:-7]` re-padded a 3; `null` só p/ ref malformado (<7 díg) |
+| `marca_cod` | str(2) **nullable** | `ref[-7:-5]` (AMC: `01`=Colcci, `14`=Triton…); `null` só p/ malformado |
+| `ordem` | str(5) **nullable** | `ref[-5:]` (ordem cronológica); `null` só p/ malformado |
 | `genero` | str | `Feminino` \| `Masculino` — confiável; usado na busca ("camiseta masculina") |
 | `categoria_txt` | str **nullable** | categoria textual (da listagem), ex.: `camisetas-e-regatas` — mais útil que `categoria_cod` para busca |
 | `produto` | str | nome, ex.: "Camiseta Feminina Essential Flex" |

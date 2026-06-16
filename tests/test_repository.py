@@ -39,7 +39,7 @@ def _produto(**kw) -> Produto:
     base = dict(
         sku="360118439-M",
         ref_produto="360118439",
-        categoria_cod="36",
+        tipo_cod="036",
         marca_cod="01",
         ordem="18439",
         genero="Feminino",
@@ -65,19 +65,20 @@ def _pedido(**kw) -> Pedido:
     return Pedido(**base)
 
 
-# --------- parse do ref Colcci ---------
-def test_parse_ref_produto_valido():
-    assert parse_ref_produto("360118439") == ("36", "01", "18439")
+# --------- parse do ref Colcci (TTT.MM.NNNNN, âncora à direita — v1.8) ---------
+def test_parse_ref_ancora_direita_9dig():
+    # 340103413 = tipo 034 . marca 01 . ordem 03413 (zeros à esq. do tipo cortados)
+    assert parse_ref_produto("340103413") == ("034", "01", "03413")
 
 
-def test_parse_ref_produto_tamanho_invalido():
-    with pytest.raises(ValueError):
-        parse_ref_produto("12345")
+def test_parse_ref_ancora_direita_8dig():
+    # 80104766 = tipo 008 . marca 01 . ordem 04766
+    assert parse_ref_produto("80104766") == ("008", "01", "04766")
 
 
-def test_parse_ref_produto_nao_numerico():
-    with pytest.raises(ValueError):
-        parse_ref_produto("36011843X")
+def test_parse_ref_malformado_sem_excecao():
+    # < 7 dígitos: derivados null, sem exceção (degrada)
+    assert parse_ref_produto("123") == (None, None, None)
 
 
 # --------- clientes ---------
@@ -155,23 +156,24 @@ def test_query_filtra_pedidos_faturados(session):
 
 
 # --------- estoque (saldo/disponivel/reservado) ---------
-def test_produto_ref8_derivados_nullable(session):
-    # ref de 8 dígitos: categoria_cod/marca_cod/ordem ficam null (nunca inventar).
+def test_produto_tipo_nullable_para_ref_malformado(session):
+    # Com a âncora-direita, derivados só ficam null p/ ref MALFORMADO (<7 díg).
+    # O modelo aceita esses nulos (nullable).
     p = _produto(
-        sku="80104766-PP",
-        ref_produto="80104766",
-        categoria_cod=None,
+        sku="123-PP",
+        ref_produto="123",
+        tipo_cod=None,
         marca_cod=None,
         ordem=None,
         categoria_txt="calcas-e-saias",
-        produto="Saia Curta Essential Poliamida",
+        produto="Produto Malformado",
         tamanho="PP",
         cor="Preto",
     )
     session.add(p)
     session.commit()
     got = session.get(Produto, p.id)
-    assert got.categoria_cod is None
+    assert got.tipo_cod is None
     assert got.marca_cod is None
     assert got.ordem is None
     assert got.genero == "Feminino"

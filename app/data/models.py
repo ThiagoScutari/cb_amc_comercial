@@ -89,15 +89,21 @@ STATUS_FATURADOS: frozenset[StatusPedido] = frozenset(
 )
 
 
-def parse_ref_produto(ref: str) -> tuple[str, str, str]:
-    """Quebra o RefId Colcci de 9 dígitos em (categoria_cod, marca_cod, ordem).
+def parse_ref_produto(ref: str | None) -> tuple[str | None, str | None, str | None]:
+    """Decodifica o RefId Colcci `TTT.MM.NNNNN` ancorando pela DIREITA (v1.8).
 
-    Ex.: "360118439" -> ("36", "01", "18439"). Levanta ValueError se o formato
-    não bater (9 dígitos numéricos).
+    O site remove os pontos e corta zeros à esquerda, então o ref tem tamanho
+    variável (tipo de 1–3 díg). Regra fixa (ancorada à direita):
+        ordem     = ref[-5:]
+        marca_cod = ref[-7:-5]
+        tipo_cod  = ref[:-7] re-padded a 3 díg (zfill)
+    Ex.: "80104766" -> ("008", "01", "04766"); "340103413" -> ("034", "01", "03413").
+
+    Ref malformado (não numérico ou < 7 díg) -> (None, None, None), sem exceção.
     """
-    if len(ref) != 9 or not ref.isdigit():
-        raise ValueError(f"ref_produto inválido: {ref!r} (esperado 9 dígitos)")
-    return ref[:2], ref[2:4], ref[4:9]
+    if not ref or not ref.isdigit() or len(ref) < 7:
+        return None, None, None
+    return ref[:-7].zfill(3), ref[-7:-5], ref[-5:]
 
 
 class Cliente(Base):
@@ -127,8 +133,9 @@ class Produto(Base):
     sku: Mapped[str] = mapped_column(String(20), unique=True, index=True)  # "360118439-M"
     # ref Colcci: 9 díg. (tops) OU 8 díg. (bottoms). Não é mais str(9) — ver §5.2 (S01b).
     ref_produto: Mapped[str] = mapped_column(String(12), index=True)
-    # Derivados do ref SÓ quando 9 díg.; null p/ 8 díg. (degrada, nunca inventa).
-    categoria_cod: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    # Derivados do ref por âncora-direita (v1.8); null só p/ ref malformado (<7 díg).
+    # tipo_cod (3 díg) codifica peça+gênero (ex.: 001=calça masc, 002=calça fem).
+    tipo_cod: Mapped[str | None] = mapped_column(String(3), nullable=True)
     marca_cod: Mapped[str | None] = mapped_column(String(2), nullable=True)
     ordem: Mapped[str | None] = mapped_column(String(5), nullable=True)
     # Confiável (vem da extração/listagem); usado na busca ("camiseta masculina").

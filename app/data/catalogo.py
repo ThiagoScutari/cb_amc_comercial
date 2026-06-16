@@ -29,12 +29,6 @@ def _preco_para_decimal(valor: str | None) -> Decimal | None:
         return None
 
 
-def _derivar_do_ref(ref: str | None) -> tuple[str | None, str | None, str | None]:
-    if ref and len(ref) == 9 and ref.isdigit():
-        return parse_ref_produto(ref)
-    return None, None, None  # 8 díg. (ou ausente): null, nunca inventa
-
-
 def carregar_produtos(fixture_path: str | Path = FIXTURE_PADRAO) -> list[Produto]:
     """Lê o fixture e devolve `Produto`s, deduplicados por `sku`. Não toca em rede."""
     data = json.loads(Path(fixture_path).read_text(encoding="utf-8"))
@@ -46,12 +40,13 @@ def carregar_produtos(fixture_path: str | Path = FIXTURE_PADRAO) -> list[Produto
             continue
         vistos.add(sku)
         ref = row.get("ref_produto")
-        categoria_cod, marca_cod, ordem = _derivar_do_ref(ref)
+        # âncora-direita; ref malformado -> (None, None, None), nunca inventa.
+        tipo_cod, marca_cod, ordem = parse_ref_produto(ref)
         produtos.append(
             Produto(
                 sku=sku,
                 ref_produto=ref,
-                categoria_cod=categoria_cod,
+                tipo_cod=tipo_cod,
                 marca_cod=marca_cod,
                 ordem=ordem,
                 genero=row.get("_genero"),
