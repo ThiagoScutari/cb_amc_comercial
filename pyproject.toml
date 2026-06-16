@@ -22,6 +22,9 @@ testpaths = ["tests"]
 addopts = "--cov=app --cov-report=term-missing --cov-fail-under=70"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "postgres: testes de IDOR em Postgres real (testcontainers; exigem Docker)",
+]
 
 [tool.coverage.run]
 source = ["app"]

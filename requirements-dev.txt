@@ -9,3 +9,4 @@ mypy==1.15.0             # tipagem estática
 pytest==8.3.4
 pytest-asyncio==1.3.0
 pytest-cov==7.1.0        # cobertura (SimpleCov -> pytest-cov)
+testcontainers==4.14.2   # Postgres efêmero p/ testes de IDOR (@pytest.mark.postgres)
