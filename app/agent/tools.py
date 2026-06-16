@@ -156,3 +156,79 @@ def _status_ou_none(valor: str | None) -> StatusPedido | None:
         return StatusPedido(valor)
     except ValueError:
         return None
+
+
+# Schemas dos tools para a Claude API (Fase 4). NENHUM traz `cliente_id`: o modelo
+# não o vê; o código o injeta a partir de `Ferramentas.cliente_id` (princípio 2).
+TOOL_DEFS: list[dict] = [
+    {
+        "name": "consultar_pedido",
+        "description": (
+            "Consulta um pedido do cliente pelo número. Use quando a pessoa citar um "
+            "número de pedido. Retorna status, prazo de entrega, itens e se está faturado."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero_pedido": {
+                    "type": "integer",
+                    "description": "Número do pedido citado pelo cliente.",
+                }
+            },
+            "required": ["numero_pedido"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "listar_pedidos",
+        "description": (
+            "Lista os pedidos do cliente. Use para 'meus pedidos'. Pode filtrar por status."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filtro_status": {
+                    "type": "string",
+                    "description": "Status para filtrar (ex.: Entregue, Confirmado, Faturado).",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "buscar_produto",
+        "description": "Busca produtos do catálogo por texto livre (ex.: 'camiseta branca M').",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "texto_busca": {"type": "string", "description": "Descrição do produto buscado."}
+            },
+            "required": ["texto_busca"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_disponibilidade",
+        "description": (
+            "Consulta a disponibilidade (saldo livre) de um produto, por sku ou por "
+            "produto/cor/tamanho. Use para 'tem pra comprar?'. Responde só o saldo."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "produto": {"type": "string"},
+                "tamanho": {"type": "string"},
+                "cor": {"type": "string"},
+                "sku": {"type": "string"},
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+]
+
+NOMES_TOOLS: frozenset[str] = frozenset(d["name"] for d in TOOL_DEFS)
+PARAMS_TOOLS: dict[str, frozenset[str]] = {
+    d["name"]: frozenset(d["input_schema"]["properties"]) for d in TOOL_DEFS
+}
