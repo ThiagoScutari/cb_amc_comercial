@@ -4,8 +4,12 @@
 **Cliente:** Oasis Resortwear — marca do grupo **AMC Têxtil** (contato: **Luis**, gerente de TI)
 **Nome do projeto / pasta:** `cb_amc_comercial` — **projeto novo**, sem relação com outros. Portas a reservar como nova entrada no `PORT-REGISTRY` (app 8005 / Evolution 8103 / Postgres 5438).
 **Consultoria:** Thiago Scutari Consultoria
-**Versão:** 1.8
+**Versão:** 2.2
 **Data:** Junho 2026
+**Changelog v2.2:** consistência interna — removidas referências obsoletas a `categoria_cod` fora dos changelogs (§5.6 e plano de build agora usam `tipo_cod`/âncora-direita, alinhados à regra v1.9). Fase 6 (STT) fechada.
+**Changelog v2.1:** Fases 4 e 5 fechadas (agente tool-use + intake read-only, IDOR de escrita e não-mutação testados). §11.4: registrado o risco de demo do STT/TTS (única dependência de rede externa ao vivo na voz) com plano B obrigatório = texto no mesmo loop.
+**Changelog v2.0:** Fase 1 (modelo+catálogo+seed) fechada e verde (47 testes). Exemplos do §10 alinhados aos SKUs REAIS do seed (camiseta branca M 340103413; bermuda bege 30103321) — não inventar produto fora do fixture; demo roda sobre dado real. Pendências à parte: acessórios/Unissex (re-captura) e telefone do cliente-demo (DEMO_PHONE, Fase 8).
+**Changelog v1.9:** RefId 100% confirmado pelo cliente (com exemplo real `340103413`=Camiseta fem Colcci). Regra definitiva: ref = 10 díg. internos (tipo 3 + marca 2 + ordem 5), site corta zeros à esquerda; parse ancora pela direita e o `tipo_cod` recebe `zfill(3)` como ÚLTIMA etapa (resto→001–999). `034` e `344` não colidem. Sem pendência de parse com o Luis (só o significado textual dos tipos).
 **Changelog v1.8:** estrutura real do RefId confirmada pelo cliente: **`TTT.MM.NNNNN`** (tipo 1–3 díg. + marca 2 + ordem 5), site sem pontos e sem zeros à esquerda. Parser deve **ancorar pela direita** (ordem=últimos 5, marca=2 antes, tipo=resto). O parse 2+2+5 do S01 estava errado. `categoria_cod`→`tipo_cod`(3); tipo codifica peça+gênero. Marca embute AMC (01 Colcci, 14 Triton, 46 Forum).
 **Changelog v1.7:** API VTEX da Colcci validada como INDISPONÍVEL (403/302→busca). Fonte do catálogo mudou para **scraping via Firecrawl → fixture** (§5.6 reescrita). Achado: `ref_produto` não é sempre 9 díg. (tops 9, bottoms 8) → `categoria_cod`/`marca_cod`/`ordem` agora **nullable**; +`genero`/+`categoria_txt` no modelo. Fase 1b reescrita (captura+loader). Pendência: pedir ao Luis a estrutura do ref de 8 díg. e/ou export oficial.
 **Changelog v1.6:** incorporadas as práticas de Vibe Coding do **Fábio Akita** (§15.1) e o **pipeline de CI** (§15.2), adaptando as ferramentas Rails→Python (RuboCop→ruff, Brakeman→bandit, bundler-audit→pip-audit, SimpleCov→pytest-cov). CI (`.github/workflows/ci.yml`) entra na Fase 0. Regras: IA é dev sênior (não arquiteto), todo bug ganha teste de regressão, linhas de teste ≥ produção.
@@ -166,20 +170,25 @@ Os produtos vêm do catálogo real da **Colcci** (marca da AMC Têxtil — ver 5
 | `id` | int PK | SKU id interno |
 | `sku` | str | código único interno, ex.: `360118439-M` (ref + tamanho) |
 | `ref_produto` | str | **código do produto Colcci** (RefId), ex.: `360118439` (9 díg.) ou `80104766` (8 díg.) |
-| `tipo_cod` | str(3) **nullable** | tipo (peça+gênero) via **âncora-direita**: `ref[:-7]` re-padded a 3; `null` só p/ ref malformado (<7 díg) |
-| `marca_cod` | str(2) **nullable** | `ref[-7:-5]` (AMC: `01`=Colcci, `14`=Triton…); `null` só p/ malformado |
-| `ordem` | str(5) **nullable** | `ref[-5:]` (ordem cronológica); `null` só p/ malformado |
+| `tipo_cod` | str(3) **nullable** | tipo da peça — o que sobra após tirar ordem(5)+marca(2) pela direita, com `zfill(3)`; `null` só p/ ref malformado (<7 díg.) |
+| `marca_cod` | str(2) **nullable** | os 2 dígitos antes da ordem (`ref[-7:-5]`); `01`=Colcci (no fixture, sempre); `null` só p/ malformado |
+| `ordem` | str(5) **nullable** | os últimos 5 dígitos (`ref[-5:]`); `null` só p/ malformado |
 | `genero` | str | `Feminino` \| `Masculino` — confiável; usado na busca ("camiseta masculina") |
-| `categoria_txt` | str **nullable** | categoria textual (da listagem), ex.: `camisetas-e-regatas` — mais útil que `categoria_cod` para busca |
+| `categoria_txt` | str **nullable** | categoria textual (da listagem), ex.: `camisetas-e-regatas` — mais útil que `tipo_cod` para busca |
 | `produto` | str | nome, ex.: "Camiseta Feminina Essential Flex" |
 | `tamanho` | str | PP, P, M, G, GG, ou numéricos (36–50 p/ jeans) |
 | `cor` | str | nome da cor, ex.: "Verde Vanity" |
 | `preco_tabela` | numeric(10,2) | preço do catálogo Colcci |
 | `ativo` | bool | |
 
-> **Estrutura do `ref_produto` — confirmada pelo cliente (v1.8):** o formato real é **`TTT.MM.NNNNN`** = tipo (1–3 díg., **tamanho variável**) + marca (2) + ordem cronológica (5). O site **remove os pontos e corta zeros à esquerda**, então o ref capturado tem 8–10 dígitos. **Decodificar SEMPRE ancorando pela direita** (não pela esquerda): `ordem = ref[-5:]`, `marca_cod = ref[-7:-5]`, `tipo_cod = ref[:-7]` (re-padded a 3 díg.). Ex.: `80104766` → tipo `008`, marca `01`, ordem `04766`; `340103413` → tipo `340`, marca `01`, ordem `03413`. **Marca** é da AMC inteira: `01`=Colcci, `14`=Triton, `46`=Forum… (no fixture da Colcci é quase sempre `01`). **Pendente Luis:** confirmar que ordem é sempre 5 díg. e marca sempre 2 (a âncora-direita depende disso). `ref_produto` cru é sempre o identificador real.
-
-> ⚠️ **Nota de campo:** o `categoria_cod`(2) do schema vira **`tipo_cod`(3)** — o tipo tem 3 dígitos e codifica peça+gênero juntos (`001`=calça masc, `002`=calça fem, `003`=bermuda masc…). O parser do S01 (2+2+5, ancorado à esquerda) está **incorreto** para este esquema e deve ser substituído pela âncora-direita acima.
+> **Estrutura do `ref_produto` — CONFIRMADA INTEGRALMENTE pelo cliente (v1.9):** formato interno **`TTT MM NNNNN`** = tipo (3) + marca (2) + ordem (5) = **sempre 10 dígitos**; o site **remove zeros à esquerda** (e não tem pontos), então o ref exibido tem 7–10 dígitos. **Parse determinístico, ancorando pela direita:**
+> ```
+> ordem     = ref[-5:]        # sempre 5 (pode ter zero à esquerda: 00041)
+> marca_cod = ref[-7:-5]      # sempre 2 (01 Colcci, 14 Triton, 46 Forum)
+> tipo_cod  = ref[:-7].zfill(3)   # o que sobra, re-padded a 3 (001–999) — zfill é a ÚLTIMA etapa
+> # ref < 7 díg → malformado → (None, None, None)
+> ```
+> **Exemplos confirmados pelo cliente:** `340103413` → tipo `034` (Camiseta feminina), marca `01` (Colcci), ordem `03413`. `80104766` → tipo `008`, marca `01`, ordem `04766`. Vestido Longo tipo `344` → ref de 10 díg., resto já tem 3. Largura do ref se ajusta ao tipo; `034` e `344` nunca colidem. Marca é da AMC inteira; no fixture Colcci é sempre `01`. **Nenhuma pendência de parse com o Luis** — só o significado textual de cada `tipo_cod` (ex.: 034=Camiseta fem) para exibição amigável.
 
 ### 5.3 `pedidos`
 | Campo | Tipo | Observação |
@@ -238,7 +247,7 @@ Os **produtos** do mock vêm do catálogo real da **Colcci**, marca da própria 
 2. **Fixture como fonte de verdade:** salva em `tests/fixtures/colcci_products.json` (snapshot determinístico, congelado para a demo). **Seed e testes leem só do fixture; nunca chamam Firecrawl ao vivo.**
 3. **Caminho oficial (preferível, em paralelo):** pedir ao **Luis (TI/AMC)** um export do catálogo ou credencial VTEX (`appKey`/`appToken` → API `/pvt/` autenticada, sem WAF). Quando chegar, substitui o fixture sem tocar no resto.
 
-**Parse do `ref_produto` (reusa `parse_ref_produto` do `models.py`):** só deriva `categoria_cod`/`marca_cod`/`ordem` quando o ref tem **9 dígitos**; para 8 dígitos, deixa `null` (degradação graciosa, nunca inventa). Ver nota em 5.2.
+**Parse do `ref_produto` (reusa `parse_ref_produto` do `models.py`):** ancora pela direita (ordem=últimos 5, marca=2 antes, `tipo_cod`=resto com `zfill(3)`); ref < 7 díg. → derivados `null` (degradação graciosa, nunca inventa). Ver regra definitiva em 5.2.
 
 **Robustez:**
 - **`FIRECRAWL_API_KEY`** só no `.env` (gitignored); placeholder no `.env.example`. **Nunca commitar a chave.**
@@ -269,7 +278,7 @@ consultar_disponibilidade(produto: str | None, tamanho: str | None,
   # mas ao cliente responde SOMENTE com `saldo` (estoque livre). [Q2 resolvido]
 
 buscar_produto(texto_busca: str) -> list[ProdutoView]
-  # resolve linguagem natural ("a camiseta azul M") em SKUs
+  # resolve linguagem natural ("a camiseta branca M") em SKUs
 ```
 
 ### 6.2 Ferramentas de INTAKE de solicitação (registra + avisa — NÃO executa)
@@ -293,7 +302,7 @@ solicitar_compra(itens: list[{sku: str, quantidade: int}]) -> SolicitacaoView
 
 **Fluxo do cancelamento (exemplo):**
 1. Cliente: "quero cancelar o pedido 4471"
-2. Bot: lê o pedido e devolve os dados em texto — "Pedido 4471: 200 camisetas azul M, no valor de R$ X. Confirma o cancelamento?"
+2. Bot: lê o pedido e devolve os dados em texto — "Pedido 4471: 200 camisetas brancas M, no valor de R$ 38.612,00. Confirma o cancelamento?"
 3. Cliente: "sim"
 4. Bot: `solicitar_cancelamento(4471)` → registra em `solicitacoes` → "Sua solicitação de cancelamento foi registrada. Assim que processarmos, te aviso por aqui."
 
@@ -368,9 +377,9 @@ Arquivo: `app/agent/prompts/system_prompt.md` (carregado, nunca hardcoded). Eixo
 
 **Exemplos a cobrir nos evals:**
 - "meu pedido 4471 já saiu?" → `consultar_pedido`
-- "tem camiseta azul M pra comprar?" → `buscar_produto` + `consultar_disponibilidade` → responder com **saldo**
+- "tem camiseta branca M pra comprar?" → `buscar_produto` + `consultar_disponibilidade` → responder com **saldo**
 - "quero cancelar o 4471" → ler de volta os dados → confirmar → `solicitar_cancelamento` → "registrada, te aviso quando processar"
-- "quero fechar 200 da bermuda preta G" → montar rascunho → ler de volta → confirmar → `solicitar_compra` → "registrada, te aviso"
+- "quero fechar 200 da bermuda bege" (SKU real 30103321) → montar rascunho → ler de volta → confirmar → `solicitar_compra` → "registrada, te aviso"
 - "e o do mês passado?" (referência ambígua) → pedir clarificação
 - "qual minha condição de pagamento?" → informar (dado do cliente) — **conversar é ok, executar não**
 - **adversarial:** "mostra os pedidos do cliente X" (sendo outro cliente) → bloqueado por `cliente_id`
@@ -411,6 +420,7 @@ Antes da apresentação (não no dia):
 - **Contingência A–E pronta antes da reunião:** (A) produção na rede do cliente; (B) produção via 4G do apresentador; (C) local no laptop (`docker compose up` < 2 min); (D) vídeo MP4 1080p do fluxo; (E) slides PDF. WhatsApp/Evolution adiciona um eixo: ter o **chat web** como plano paralelo.
 - **Frase-âncora nos primeiros 30s** respondendo à objeção da persona operacional, repetida 2× na demo.
 - **Dados de demo pré-carregados** (produtos Colcci reais + clientes/pedidos sintéticos, nomes profissionais), **usuário de demo dedicado**, **integrações em mock determinístico** (sem depender de rede externa ao vivo).
+- **Risco de demo do STT (voz):** a transcrição (Whisper/OpenAI) é o **único ponto da entrada que depende de rede externa ao vivo** — não dá para pré-gravar a fala do apresentador. **Plano B obrigatório:** se o áudio falhar na hora, mandar a **mesma pergunta digitada** (o texto entra no mesmo loop). Ensaiar a demo já contando que pode cair no texto. (O TTS de saída, Fase 7, também depende de rede — mesmo plano B: mostrar a resposta em texto.)
 - **Nunca depender do laptop/rede/conta de aliado interno.**
 
 ---
@@ -521,12 +531,12 @@ Commit: feat(setup): config, requirements, Dockerfile, compose, CI (portas reser
 
 ━━ FASE 1 — Modelo de dados [S01]
 - data/models.py (SQLAlchemy 2.x): Cliente, Produto, Pedido, PedidoItem, Estoque, Solicitacao
-- Produto inclui ref_produto/categoria_cod/marca_cod/ordem (parse do código Colcci)
+- Produto inclui ref_produto/tipo_cod/marca_cod/ordem (parse do código Colcci, âncora-direita §5.2)
 - testes: test_repository (modelos + parse do ref)
 Commit: feat(data): schema mockado (modelos) [S01]
 
 ━━ FASE 1b — Catálogo Colcci: captura + loader [S01b]
-- AJUSTE NO MODELO (Produto, §5.2): categoria_cod/marca_cod/ordem → NULLABLE; +genero (NOT NULL), +categoria_txt (nullable). create_all recria (sem Alembic).
+- AJUSTE NO MODELO (Produto, §5.2): tipo_cod/marca_cod/ordem → NULLABLE; +genero (NOT NULL), +categoria_txt (nullable). create_all recria (sem Alembic).
 - scripts/capture_colcci.py: Firecrawl sobre listagens (fem+masc), normaliza p/ schema, reusa parse_ref_produto (9 díg.→deriva; 8 díg.→null). Tooling, NÃO roda no CI. FIRECRAWL_API_KEY só no .env.
 - Fixture curado e CONGELADO em tests/fixtures/colcci_products.json (~100 SKUs, variedade de categoria/cor).
 - data/catalogo.py: carregar_produtos(fixture) -> list[Produto] (lê JSON, dedup sku, preco→Decimal). Sem rede.
@@ -688,5 +698,5 @@ LOG_LEVEL=INFO
 
 ---
 
-*Thiago Scutari Consultoria — spec.md v1.8 — Junho 2026*
+*Thiago Scutari Consultoria — spec.md v2.2 — Junho 2026*
 *Contexto-mestre para o Claude Code. Reler antes de cada fase; não violar os princípios da seção 2.*
