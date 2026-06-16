@@ -37,6 +37,9 @@ FALLBACK = (
     "Tive um probleminha técnico aqui. Pode repetir, por favor? "
     "Se continuar, já te passo pra uma pessoa do nosso time."
 )
+# Marca um turno vindo de áudio (STT, Fase 6): ativa a regra de read-back do
+# system_prompt (ler números de volta antes de registrar). O modelo VÊ esta linha.
+MARCADOR_AUDIO = "[mensagem transcrita de áudio]"
 
 Mensagem = dict
 _ERROS_API = (APITimeoutError, RateLimitError, APIConnectionError, APIStatusError)
@@ -93,11 +96,22 @@ class Orquestrador:
         self.model = model or get_settings().agent_model
 
     @staticmethod
-    def _primeiro_turno(mensagem: str, nome: str | None, historico: list[Mensagem]) -> Mensagem:
-        # Nome (da sessão) só no 1º turno, como linha de contexto — mantém o system
-        # prompt estável/cacheável (não põe nome nem cliente_id no system).
+    def _primeiro_turno(
+        mensagem: str,
+        nome: str | None,
+        historico: list[Mensagem],
+        origem_audio: bool = False,
+    ) -> Mensagem:
+        # Linhas de contexto antes da mensagem (mantêm o system prompt estável/cacheável):
+        # - marcador de áudio: em TODO turno vindo de voz (ativa o read-back).
+        # - nome (da sessão): só no 1º turno. Nunca põe nome nem cliente_id no system.
+        linhas = []
+        if origem_audio:
+            linhas.append(MARCADOR_AUDIO)
         if nome and not historico:
-            return {"role": "user", "content": f"[Cliente identificado: {nome}]\n{mensagem}"}
+            linhas.append(f"[Cliente identificado: {nome}]")
+        if linhas:
+            return {"role": "user", "content": "\n".join(linhas) + "\n" + mensagem}
         return {"role": "user", "content": mensagem}
 
     async def responder(
@@ -106,9 +120,10 @@ class Orquestrador:
         cliente_id: int,
         mensagem: str,
         nome: str | None = None,
+        origem_audio: bool = False,
     ) -> str:
         historico = self.store.historico(cliente_id)
-        msgs = historico + [self._primeiro_turno(mensagem, nome, historico)]
+        msgs = historico + [self._primeiro_turno(mensagem, nome, historico, origem_audio)]
 
         resp = None
         sucesso = False

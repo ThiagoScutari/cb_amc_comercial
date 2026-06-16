@@ -202,6 +202,28 @@ def test_nome_do_cliente_entra_so_no_primeiro_turno():
     assert segundo["content"] == "de novo"  # sem nome a partir do 2º turno
 
 
+# ---------- origem áudio: fiação do read-back (Fase 6) ----------
+def test_origem_audio_injeta_marcador():
+    from app.agent.orchestrator import MARCADOR_AUDIO
+
+    turno = Orquestrador._primeiro_turno("cancelar 4471", None, [], origem_audio=True)
+    assert MARCADOR_AUDIO in turno["content"]
+    assert "cancelar 4471" in turno["content"]
+
+
+async def test_origem_audio_chega_ao_modelo_ativa_readback(ferramentas):
+    # EFEITO: áudio -> marcador -> o modelo VÊ o marcador no turno do usuário
+    # (a regra de read-back do prompt é ativada; o comportamento é eval da Fase 9).
+    from app.agent.orchestrator import MARCADOR_AUDIO
+
+    fake = FakeAnthropic([_msg([_texto("Confirmando: pedido quatro-quatro-sete-um?")], "end_turn")])
+    await Orquestrador(fake, HistoricoMemoria(), model=MODELO).responder(
+        ferramentas, cliente_id=1, mensagem="cancelar 4471", origem_audio=True
+    )
+    user_turn = fake.capturas[0]["messages"][-1]
+    assert MARCADOR_AUDIO in user_turn["content"]
+
+
 def test_truncar_por_turnos_preserva_inicio_user():
     msgs = [
         {"role": "user", "content": "t1"},
