@@ -4,8 +4,10 @@
 **Cliente:** Oasis Resortwear — marca do grupo **AMC Têxtil** (contato: **Luis**, gerente de TI)
 **Nome do projeto / pasta:** `cb_amc_comercial` — **projeto novo**, sem relação com outros. Portas a reservar como nova entrada no `PORT-REGISTRY` (app 8005 / Evolution 8103 / Postgres 5438).
 **Consultoria:** Thiago Scutari Consultoria
-**Versão:** 1.6
+**Versão:** 1.8
 **Data:** Junho 2026
+**Changelog v1.8:** estrutura real do RefId confirmada pelo cliente: **`TTT.MM.NNNNN`** (tipo 1–3 díg. + marca 2 + ordem 5), site sem pontos e sem zeros à esquerda. Parser deve **ancorar pela direita** (ordem=últimos 5, marca=2 antes, tipo=resto). O parse 2+2+5 do S01 estava errado. `categoria_cod`→`tipo_cod`(3); tipo codifica peça+gênero. Marca embute AMC (01 Colcci, 14 Triton, 46 Forum).
+**Changelog v1.7:** API VTEX da Colcci validada como INDISPONÍVEL (403/302→busca). Fonte do catálogo mudou para **scraping via Firecrawl → fixture** (§5.6 reescrita). Achado: `ref_produto` não é sempre 9 díg. (tops 9, bottoms 8) → `categoria_cod`/`marca_cod`/`ordem` agora **nullable**; +`genero`/+`categoria_txt` no modelo. Fase 1b reescrita (captura+loader). Pendência: pedir ao Luis a estrutura do ref de 8 díg. e/ou export oficial.
 **Changelog v1.6:** incorporadas as práticas de Vibe Coding do **Fábio Akita** (§15.1) e o **pipeline de CI** (§15.2), adaptando as ferramentas Rails→Python (RuboCop→ruff, Brakeman→bandit, bundler-audit→pip-audit, SimpleCov→pytest-cov). CI (`.github/workflows/ci.yml`) entra na Fase 0. Regras: IA é dev sênior (não arquiteto), todo bug ganha teste de regressão, linhas de teste ≥ produção.
 **Changelog v1.5:** correção — `cb_amc_comercial` é projeto **novo**, sem portas registradas. Alocadas as **próximas livres** do PORT-REGISTRY: app **8005** / Evolution **8103** / Postgres **5438** (a entrada "Chatbot Oasis Resortwear (AMC)" 8002/8102/5434 é de outro projeto). Reservar a nova entrada no registry.
 **Changelog v1.4:** nome do projeto reconciliado para **`cb_amc_comercial`** (pasta, containers `cb_amc_comercial_app/db/evolution`, DB, instância Evolution) — mantendo a reserva de portas registrada como "Chatbot Oasis Resortwear (AMC)".
@@ -163,17 +165,21 @@ Os produtos vêm do catálogo real da **Colcci** (marca da AMC Têxtil — ver 5
 |---|---|---|
 | `id` | int PK | SKU id interno |
 | `sku` | str | código único interno, ex.: `360118439-M` (ref + tamanho) |
-| `ref_produto` | str(9) | **código do produto Colcci** (RefId VTEX), ex.: `360118439` |
-| `categoria_cod` | str(2) | 2 primeiros dígitos do ref, ex.: `36` = Blusa Feminina |
-| `marca_cod` | str(2) | dígitos 3–4 do ref, ex.: `01` = Colcci |
-| `ordem` | str(5) | dígitos 5–9 (ordem cronológica), ex.: `18439` |
-| `produto` | str | nome, ex.: "Blusa Estruturada Bustier" |
-| `tamanho` | str | PP, P, M, G, GG |
+| `ref_produto` | str | **código do produto Colcci** (RefId), ex.: `360118439` (9 díg.) ou `80104766` (8 díg.) |
+| `categoria_cod` | str(2) **nullable** | 2 primeiros dígitos do ref **quando 9 díg.**; `null` p/ refs de 8 díg. |
+| `marca_cod` | str(2) **nullable** | dígitos 3–4 do ref quando 9 díg. (sempre `01`=Colcci); `null` p/ 8 díg. |
+| `ordem` | str(5) **nullable** | dígitos 5–9 quando 9 díg.; `null` p/ 8 díg. |
+| `genero` | str | `Feminino` \| `Masculino` — confiável; usado na busca ("camiseta masculina") |
+| `categoria_txt` | str **nullable** | categoria textual (da listagem), ex.: `camisetas-e-regatas` — mais útil que `categoria_cod` para busca |
+| `produto` | str | nome, ex.: "Camiseta Feminina Essential Flex" |
+| `tamanho` | str | PP, P, M, G, GG, ou numéricos (36–50 p/ jeans) |
 | `cor` | str | nome da cor, ex.: "Verde Vanity" |
 | `preco_tabela` | numeric(10,2) | preço do catálogo Colcci |
 | `ativo` | bool | |
 
-> **Estrutura do `ref_produto` (9 dígitos), confirmada pelo cliente:** `[CC][MM][NNNNN]` → `CC`=categoria (36 = Blusa Feminina), `MM`=marca (01 = Colcci), `NNNNN`=ordem cronológica. O seed parseia esses campos a partir do ref.
+> **Estrutura do `ref_produto` — confirmada pelo cliente (v1.8):** o formato real é **`TTT.MM.NNNNN`** = tipo (1–3 díg., **tamanho variável**) + marca (2) + ordem cronológica (5). O site **remove os pontos e corta zeros à esquerda**, então o ref capturado tem 8–10 dígitos. **Decodificar SEMPRE ancorando pela direita** (não pela esquerda): `ordem = ref[-5:]`, `marca_cod = ref[-7:-5]`, `tipo_cod = ref[:-7]` (re-padded a 3 díg.). Ex.: `80104766` → tipo `008`, marca `01`, ordem `04766`; `340103413` → tipo `340`, marca `01`, ordem `03413`. **Marca** é da AMC inteira: `01`=Colcci, `14`=Triton, `46`=Forum… (no fixture da Colcci é quase sempre `01`). **Pendente Luis:** confirmar que ordem é sempre 5 díg. e marca sempre 2 (a âncora-direita depende disso). `ref_produto` cru é sempre o identificador real.
+
+> ⚠️ **Nota de campo:** o `categoria_cod`(2) do schema vira **`tipo_cod`(3)** — o tipo tem 3 dígitos e codifica peça+gênero juntos (`001`=calça masc, `002`=calça fem, `003`=bermuda masc…). O parser do S01 (2+2+5, ancorado à esquerda) está **incorreto** para este esquema e deve ser substituído pela âncora-direita acima.
 
 ### 5.3 `pedidos`
 | Campo | Tipo | Observação |
@@ -221,41 +227,25 @@ Toda ação de escrita (cancelamento, compra) gera um registro aqui, em vez de m
 | `status` | enum | `pendente` (aguardando humano) |
 | `criado_em` | timestamp | |
 
-### 5.6 Origem dos produtos — catálogo Colcci (VTEX)
+### 5.6 Origem dos produtos — catálogo Colcci (scraping → fixture)
 
-Os **produtos** do mock vêm do catálogo real da **Colcci**, que é marca da própria **AMC Têxtil** — portanto é dado autêntico da AMC, não de terceiro. Os demais dados (clientes, pedidos, estoque, solicitações) continuam **sintéticos**.
+Os **produtos** do mock vêm do catálogo real da **Colcci**, marca da própria **AMC Têxtil** — dado autêntico da AMC, não de terceiro. Os demais dados (clientes, pedidos, estoque, solicitações) continuam **sintéticos**.
 
-**Método (hierarquia de robustez — do estudo, Pilar de scraping):**
+> **Premissa corrigida (S01b):** o spec original assumia a **API pública VTEX** (`/api/catalog_system/pub/products/search`) como fonte. **Validação por curl provou que essa rota está desativada na Colcci** — sem User-Agent retorna `403` (página de manutenção/WAF); com User-Agent retorna `302` para a busca textual do storefront (`/pesquisa`), que não é a API de catálogo. A loja provavelmente usa Intelligent Search (VTEX IO), não a Legacy Search. **Portanto a fonte passou a ser scraping via Firecrawl → fixture.**
 
-1. **API pública de catálogo VTEX (PREFERENCIAL — JSON, sem raspar HTML).** A loja é VTEX; a página de produto tem anti-bot, mas a API pública de catálogo é aberta. Endpoints a usar (verificar no momento da implementação — o Claude Code roda com internet):
-   ```
-   # Por código do produto (RefId) — o "código do produto" do cliente:
-   https://www.colcci.com.br/api/catalog_system/pub/products/search?fq=alternateIds_RefId:360118439
+**Método (atual):**
+1. **Captura via Firecrawl** (`scripts/capture_colcci.py`, fora do `app/`, não roda no CI): navega listagens de categoria (feminino + masculino), extrai `produto`, `ref_produto`, `cor`, `tamanho`, `preco`, `genero`, `categoria_txt`; normaliza para o schema 5.2 (1 linha = 1 SKU = produto × cor × tamanho). UA de browser + throttle. **Ferramenta de captura, rodada sob demanda — nunca no CI nem no seed.**
+2. **Fixture como fonte de verdade:** salva em `tests/fixtures/colcci_products.json` (snapshot determinístico, congelado para a demo). **Seed e testes leem só do fixture; nunca chamam Firecrawl ao vivo.**
+3. **Caminho oficial (preferível, em paralelo):** pedir ao **Luis (TI/AMC)** um export do catálogo ou credencial VTEX (`appKey`/`appToken` → API `/pvt/` autenticada, sem WAF). Quando chegar, substitui o fixture sem tocar no resto.
 
-   # Busca por texto (para popular em lote), com paginação (máx 50/página via _from/_to):
-   https://www.colcci.com.br/api/catalog_system/pub/products/search?ft=blusa&_from=0&_to=49
+**Parse do `ref_produto` (reusa `parse_ref_produto` do `models.py`):** só deriva `categoria_cod`/`marca_cod`/`ordem` quando o ref tem **9 dígitos**; para 8 dígitos, deixa `null` (degradação graciosa, nunca inventa). Ver nota em 5.2.
 
-   # Por categoria (árvore de categorias):
-   https://www.colcci.com.br/api/catalog_system/pub/category/tree/3
-   https://www.colcci.com.br/api/catalog_system/pub/products/search?fq=C:/<categoryId>/&_from=0&_to=49
-   ```
-2. **Fallback — navegador headless (Playwright)** sobre a vitrine, se a API pública estiver bloqueada. Mais frágil; usar só se 1 falhar.
-3. **Último recurso — dados sintéticos** plausíveis de moda têxtil, se nada acima funcionar.
+**Robustez:**
+- **`FIRECRAWL_API_KEY`** só no `.env` (gitignored); placeholder no `.env.example`. **Nunca commitar a chave.**
+- **Degradação graciosa:** campo ausente não quebra a carga; loga e segue. Dedup de `sku` no seed. `preco` string no fixture → `Decimal` no seed.
+- Meta de volume: ~100 SKUs com mix de gênero e variedade de categoria/cor — suficiente para um demo convincente.
 
-**Campos a extrair do JSON VTEX (por produto):** `productName`, `brand`, `productReference`/`RefId`, `items[]` (cada item é um SKU: tem `Tamanho`, `images[]`, e `sellers[].commertialOffer.Price`/`ListPrice`/`AvailableQuantity`), e a cor (em loja de moda VTEX a **cor** costuma vir como um produto/RefId próprio e os **tamanhos** como itens/SKUs — exatamente o caso do exemplo: RefId `360118439` = "Verde Vanity" com tamanhos PP–GG).
-
-**Mapeamento VTEX → schema (5.2):**
-- 1 produto VTEX (RefId) → expande em N linhas em `produtos`, uma por **tamanho**, compartilhando `produto`/`cor`/`ref_produto`, diferindo no `tamanho` (`sku` = `{ref}-{tamanho}`).
-- `ref_produto` → parsear `categoria_cod` (2) + `marca_cod` (2) + `ordem` (5).
-- `preco_tabela` ← `commertialOffer.Price` (ou `ListPrice`).
-
-**Robustez e cortesia (do estudo):**
-- **Cache local:** salvar o JSON cru em `tests/fixtures/colcci_products.json`. O seed lê do cache; só re-bate na API com flag `--refresh`. Isso evita martelar a API e dá testes sem rede.
-- **Rate limit:** pausa entre requisições; paginar de 50 em 50.
-- **Degradação graciosa:** campo ausente não quebra o seed; loga e segue.
-- Meta de volume: ~30–60 produtos reais (várias categorias/cores) é suficiente para um demo convincente.
-
-> **Script:** `scripts/ingest_colcci.py` — busca via API, normaliza, salva o fixture; o `seed.py` consome o fixture para popular `produtos`.
+> **Scripts:** `scripts/capture_colcci.py` (Firecrawl → fixture, sob demanda, fora do CI) e `app/data/catalogo.py` (`carregar_produtos(fixture)` → `list[Produto]`, sem rede); o `seed.py` (Fase 1c) consome o loader para popular `produtos`.
 
 ---
 
@@ -475,7 +465,7 @@ cb_amc_comercial/
 │       └── escalation.py        # fallback para humano
 │
 ├── scripts/
-│   └── ingest_colcci.py         # busca catálogo VTEX da Colcci → tests/fixtures/colcci_products.json
+│   └── capture_colcci.py        # Firecrawl: scraping Colcci → tests/fixtures/colcci_products.json (tooling, fora do CI)
 │
 ├── tests/
 │   ├── conftest.py              # fixtures (clientes/produtos/pedidos de teste)
@@ -535,12 +525,13 @@ Commit: feat(setup): config, requirements, Dockerfile, compose, CI (portas reser
 - testes: test_repository (modelos + parse do ref)
 Commit: feat(data): schema mockado (modelos) [S01]
 
-━━ FASE 1b — Ingestão do catálogo Colcci [S01b]
-- scripts/ingest_colcci.py: buscar via API pública VTEX (seção 5.6); fallback headless; salvar
-  tests/fixtures/colcci_products.json (cache). Rate limit + paginação + degradação graciosa.
-- VALIDAR: rodar com RefId 360118439 (exemplo do cliente) e confirmar parse de cor/tamanhos/preço
-- testes: parse do JSON → linhas de produto (usar o fixture, sem rede)
-Commit: feat(data): ingestão do catálogo Colcci (VTEX) [S01b]
+━━ FASE 1b — Catálogo Colcci: captura + loader [S01b]
+- AJUSTE NO MODELO (Produto, §5.2): categoria_cod/marca_cod/ordem → NULLABLE; +genero (NOT NULL), +categoria_txt (nullable). create_all recria (sem Alembic).
+- scripts/capture_colcci.py: Firecrawl sobre listagens (fem+masc), normaliza p/ schema, reusa parse_ref_produto (9 díg.→deriva; 8 díg.→null). Tooling, NÃO roda no CI. FIRECRAWL_API_KEY só no .env.
+- Fixture curado e CONGELADO em tests/fixtures/colcci_products.json (~100 SKUs, variedade de categoria/cor).
+- data/catalogo.py: carregar_produtos(fixture) -> list[Produto] (lê JSON, dedup sku, preco→Decimal). Sem rede.
+- testes (lendo fixture): contagem; ref-9 parseado; ref-8 → derivados null; sku único; preco vira Decimal; genero presente
+Commit: feat(data): catálogo Colcci via captura→fixture + loader [S01b]
 
 ━━ FASE 1c — Seed [S01c]
 - data/seed.py: produtos ← fixture Colcci (expandir em SKUs por tamanho/cor);
@@ -664,7 +655,7 @@ Ordem (falha rápido no barato): `ruff` → `bandit` → `pip-audit` → `pytest
 | **Q6** | TTS = ElevenLabs (onboarding na Fase 7) | ✅ Resolvido |
 | **Q4** | Projetos a unir: chatbot_imagem + estudo + SheetTalk + Camisart | 🟡 Default (sem objeção) |
 | **Q7** | Agente = `claude-sonnet-4-6`; avaliar Haiku no caminho fácil por eval | 🟡 Default |
-| **Q8** | Produtos = catálogo real da **Colcci** (marca da AMC) via API VTEX; demais dados sintéticos | ✅ Resolvido |
+| **Q8** | Produtos = catálogo real da **Colcci** (marca da AMC) via **scraping Firecrawl → fixture** (API VTEX indisponível); demais dados sintéticos | ✅ Resolvido (fonte ajustada em v1.7) |
 
 ---
 
@@ -697,5 +688,5 @@ LOG_LEVEL=INFO
 
 ---
 
-*Thiago Scutari Consultoria — spec.md v1.6 — Junho 2026*
+*Thiago Scutari Consultoria — spec.md v1.8 — Junho 2026*
 *Contexto-mestre para o Claude Code. Reler antes de cada fase; não violar os princípios da seção 2.*

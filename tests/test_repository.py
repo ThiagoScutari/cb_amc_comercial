@@ -42,6 +42,8 @@ def _produto(**kw) -> Produto:
         categoria_cod="36",
         marca_cod="01",
         ordem="18439",
+        genero="Feminino",
+        categoria_txt="camisetas-e-regatas",
         produto="Blusa Estruturada Bustier",
         tamanho="M",
         cor="Verde Vanity",
@@ -153,6 +155,36 @@ def test_query_filtra_pedidos_faturados(session):
 
 
 # --------- estoque (saldo/disponivel/reservado) ---------
+def test_produto_ref8_derivados_nullable(session):
+    # ref de 8 dígitos: categoria_cod/marca_cod/ordem ficam null (nunca inventar).
+    p = _produto(
+        sku="80104766-PP",
+        ref_produto="80104766",
+        categoria_cod=None,
+        marca_cod=None,
+        ordem=None,
+        categoria_txt="calcas-e-saias",
+        produto="Saia Curta Essential Poliamida",
+        tamanho="PP",
+        cor="Preto",
+    )
+    session.add(p)
+    session.commit()
+    got = session.get(Produto, p.id)
+    assert got.categoria_cod is None
+    assert got.marca_cod is None
+    assert got.ordem is None
+    assert got.genero == "Feminino"
+    assert got.categoria_txt == "calcas-e-saias"
+
+
+def test_produto_genero_obrigatorio(session):
+    session.add(_produto(genero=None))
+    with pytest.raises(IntegrityError):
+        session.commit()
+    session.rollback()
+
+
 def test_estoque_1a1_e_campos(session):
     produto = _produto()
     session.add(produto)

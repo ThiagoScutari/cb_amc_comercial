@@ -53,7 +53,7 @@ class Base(DeclarativeBase):
     pass
 
 
-class StatusPedido(str, enum.Enum):
+class StatusPedido(enum.StrEnum):
     """Ciclo de status (spec §5.3), incluindo os ramos de cancelamento."""
 
     em_analise = "Em análise"
@@ -67,12 +67,12 @@ class StatusPedido(str, enum.Enum):
     cancelado = "Cancelado"
 
 
-class TipoSolicitacao(str, enum.Enum):
+class TipoSolicitacao(enum.StrEnum):
     cancelamento = "cancelamento"
     compra = "compra"
 
 
-class StatusSolicitacao(str, enum.Enum):
+class StatusSolicitacao(enum.StrEnum):
     pendente = "pendente"
 
 
@@ -125,10 +125,15 @@ class Produto(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     sku: Mapped[str] = mapped_column(String(20), unique=True, index=True)  # "360118439-M"
-    ref_produto: Mapped[str] = mapped_column(String(9), index=True)  # RefId VTEX
-    categoria_cod: Mapped[str] = mapped_column(String(2))  # derivado do ref
-    marca_cod: Mapped[str] = mapped_column(String(2))  # derivado do ref
-    ordem: Mapped[str] = mapped_column(String(5))  # derivado do ref
+    # ref Colcci: 9 díg. (tops) OU 8 díg. (bottoms). Não é mais str(9) — ver §5.2 (S01b).
+    ref_produto: Mapped[str] = mapped_column(String(12), index=True)
+    # Derivados do ref SÓ quando 9 díg.; null p/ 8 díg. (degrada, nunca inventa).
+    categoria_cod: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    marca_cod: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    ordem: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    # Confiável (vem da extração/listagem); usado na busca ("camiseta masculina").
+    genero: Mapped[str] = mapped_column(String(10))  # "Feminino" | "Masculino"
+    categoria_txt: Mapped[str | None] = mapped_column(String(60), nullable=True)
     produto: Mapped[str] = mapped_column(String(120))
     tamanho: Mapped[str] = mapped_column(String(4))
     cor: Mapped[str] = mapped_column(String(40))
