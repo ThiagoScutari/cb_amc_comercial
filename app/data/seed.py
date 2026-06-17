@@ -32,6 +32,7 @@ from app.data.models import (
     Estoque,
     Pedido,
     PedidoItem,
+    Produto,
     Solicitacao,
     StatusPedido,
     TipoSolicitacao,
@@ -230,6 +231,36 @@ def _plano_pedidos(sku_idx) -> list[tuple[int, int, StatusPedido, list[tuple[str
     return planos
 
 
+def criar_pedido(
+    numero: int,
+    cliente_id: int,
+    status: StatusPedido,
+    itens: list[tuple[str, int]],
+    prod_by_sku: dict[str, Produto],
+) -> Pedido:
+    """Monta um Pedido COERENTE: datas por status (_OFFSETS) e
+    valor_total = Σ(quantidade × preco_tabela). Fonte ÚNICA da invariante —
+    reusada por popular() (seed) e pelo cadastro de demo sob demanda."""
+    dp, dpe = _OFFSETS[status]
+    pedido = Pedido(
+        id=numero,
+        cliente_id=cliente_id,
+        status=status,
+        data_pedido=DATA_REF + dt.timedelta(days=dp),
+        data_prevista_entrega=(DATA_REF + dt.timedelta(days=dpe)) if dpe is not None else None,
+        valor_total=Decimal("0"),
+    )
+    total = Decimal("0")
+    for sku, qtd in itens:
+        prod = prod_by_sku[sku]
+        pedido.itens.append(
+            PedidoItem(sku_id=prod.id, quantidade=qtd, preco_unitario=prod.preco_tabela)
+        )
+        total += qtd * prod.preco_tabela
+    pedido.valor_total = total
+    return pedido
+
+
 def popular(session: Session) -> None:
     """Popula todas as tabelas em ordem FK-safe, coerente e determinística."""
     # 1) clientes
@@ -250,15 +281,7 @@ def popular(session: Session) -> None:
     reservado: dict[int, int] = defaultdict(int)
     disponivel: dict[int, int] = defaultdict(int)
     for numero, cliente_id, status, itens in _plano_pedidos(sku_idx):
-        dp, dpe = _OFFSETS[status]
-        pedido = Pedido(
-            id=numero,
-            cliente_id=cliente_id,
-            status=status,
-            data_pedido=DATA_REF + dt.timedelta(days=dp),
-            data_prevista_entrega=(DATA_REF + dt.timedelta(days=dpe)) if dpe is not None else None,
-            valor_total=Decimal("0"),
-        )
+        pedido = criar_pedido(numero, cliente_id, status, itens, prod_by_sku)
         # bucket de estoque: faturado->reservado; não-faturado e não-cancelado->disponivel.
         if status in STATUS_FATURADOS:
             bucket = reservado
@@ -266,16 +289,9 @@ def popular(session: Session) -> None:
             bucket = disponivel
         else:
             bucket = None  # cancelado: itens "voltam" — não entram em nenhum
-        total = Decimal("0")
-        for sku, qtd in itens:
-            prod = prod_by_sku[sku]
-            pedido.itens.append(
-                PedidoItem(sku_id=prod.id, quantidade=qtd, preco_unitario=prod.preco_tabela)
-            )
-            total += qtd * prod.preco_tabela
-            if bucket is not None:
-                bucket[prod.id] += qtd
-        pedido.valor_total = total
+        if bucket is not None:
+            for it in pedido.itens:
+                bucket[it.sku_id] += it.quantidade
         session.add(pedido)
     session.flush()
 
