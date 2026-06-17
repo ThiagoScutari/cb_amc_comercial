@@ -31,6 +31,8 @@ class FakeEvolutionClient:
     def __init__(self, audio_in: bytes | None = b"ogg-bytes"):
         self.textos: list[tuple[str, str]] = []
         self.audios: list[tuple[str, bytes]] = []
+        self.documentos: list[tuple[str, bytes, str]] = []
+        self.falha_documento = False  # True -> enviar_documento levanta (simula Evolution fora)
         self.buscou = 0
         self._audio_in = audio_in
 
@@ -40,6 +42,14 @@ class FakeEvolutionClient:
 
     async def enviar_audio(self, telefone, audio):
         self.audios.append((telefone, audio))
+        return True
+
+    async def enviar_documento(
+        self, telefone, conteudo, *, filename, mimetype="text/html", caption=None
+    ):
+        if self.falha_documento:
+            raise RuntimeError("evolution sendMedia caiu")
+        self.documentos.append((telefone, conteudo, filename))
         return True
 
     async def buscar_audio(self, mensagem):
@@ -94,11 +104,15 @@ class FakeCliente:
 
 
 class FakeRepo:
-    def __init__(self, cliente):
+    def __init__(self, cliente, pedidos=None):
         self._cliente = cliente
+        self._pedidos = pedidos or []
 
     def cliente_por_telefone(self, telefone):
         return self._cliente
+
+    def listar_pedidos(self, cliente_id, filtro_status=None):
+        return self._pedidos  # já "filtrado": só os pedidos deste cliente
 
 
 @contextlib.contextmanager
@@ -237,6 +251,54 @@ async def test_audio_fala_por_extenso_texto_continua_formatado():
     assert tts.textos == ["Seu pedido tem duzentas peças."]  # áudio: derivado, por extenso
 
 
+# ---------- resumo visual em HTML (aditivo) ----------
+def test_quer_resumo_visual_casa_frases_de_resumo():
+    from app.whatsapp.router import _quer_resumo_visual
+
+    for t in [
+        "meus pedidos",
+        "me manda o resumo dos pedidos",
+        "qual o status dos pedidos?",
+        "quero um resumo de pedidos",
+        "todos os pedidos",
+        "MEUS PEDIDOS",
+    ]:
+        assert _quer_resumo_visual(t) is True, t
+
+
+def test_quer_resumo_visual_ignora_texto_comum():
+    from app.whatsapp.router import _quer_resumo_visual
+
+    for t in ["tem camiseta branca M?", "cadê meu pedido 4471", "oi", "quero cancelar o 4471", ""]:
+        assert _quer_resumo_visual(t) is False, t
+
+
+async def test_gatilho_resumo_envia_documento_alem_do_texto():
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("meus pedidos"))
+    assert len(client.textos) == 1  # TEXTO sempre (a garantia)
+    assert len(client.documentos) == 1  # + documento HTML (aditivo)
+    tel, conteudo, fname = client.documentos[0]
+    assert tel == _TEL and fname.endswith(".html")
+    assert b"<!DOCTYPE html>" in conteudo  # é o HTML gerado de verdade
+
+
+async def test_sem_gatilho_nao_envia_documento():
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("tem camiseta branca M?"))
+    assert len(client.documentos) == 0
+    assert len(client.textos) == 1
+
+
+async def test_documento_que_falha_nao_quebra_o_texto():
+    # ADITIVO: se o envio do HTML lança, o texto JÁ saiu e nada quebra (try/except amplo).
+    disp, client, orq, stt, tts = _make()
+    client.falha_documento = True
+    await disp.processar(_texto_payload("meus pedidos"))
+    assert len(client.textos) == 1  # texto entregue mesmo com o HTML falhando
+    assert len(client.documentos) == 0  # nada registrado (falhou e foi engolido)
+
+
 async def test_audio_que_nao_baixa_pede_para_repetir_sem_chamar_agente():
     disp, client, orq, stt, tts = _make(audio_in=None)  # buscar_audio devolve None
     await disp.processar(_audio_payload())
@@ -350,6 +412,38 @@ async def test_enviar_audio_manda_base64():
     cli = _client(handler)
     assert await cli.enviar_audio("5531988880002", b"\x00\x01mp3") is True
     assert capturado["json"]["audio"] == base64.b64encode(b"\x00\x01mp3").decode("ascii")
+    await cli.aclose()
+
+
+async def test_enviar_documento_monta_sendmedia_com_data_uri():
+    capturado = {}
+
+    def handler(request):
+        capturado["url"] = str(request.url)
+        capturado["json"] = json.loads(request.content)
+        return httpx.Response(200, json={"key": {"id": "x"}})
+
+    cli = _client(handler)
+    ok = await cli.enviar_documento(
+        "5531988880002", b"<html>x</html>", filename="Resumo.html", caption="Seu resumo"
+    )
+    assert ok is True
+    assert capturado["url"] == "http://evo:8080/message/sendMedia/inst"
+    j = capturado["json"]
+    assert j["number"] == "5531988880002"
+    assert j["mediatype"] == "document" and j["mimetype"] == "text/html"
+    assert j["fileName"] == "Resumo.html" and j["caption"] == "Seu resumo"
+    b64 = base64.b64encode(b"<html>x</html>").decode("ascii")
+    assert j["media"] == f"data:text/html;base64,{b64}"
+    await cli.aclose()
+
+
+async def test_enviar_documento_degrada_para_false_em_erro():
+    def handler(request):
+        return httpx.Response(500, json={})
+
+    cli = _client(handler)
+    assert await cli.enviar_documento("5531988880002", b"x", filename="a.html") is False
     await cli.aclose()
 
 

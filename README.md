@@ -101,6 +101,9 @@ inexistente). A rede externa precisa existir antes na VPS (`docker network ls`).
       nota de voz (ptt opus) e toca como áudio nativo
 - [ ] `DEMO_PHONE` (em `app/data/seed.py`) trocado pelo número real do cliente-demo,
       e o `remoteJid` casa com o `telefone_whatsapp` do seed
+- [ ] **resumo visual:** mandar "meus pedidos" e confirmar que chega o documento
+      `Resumo de Pedidos.html` (sendMedia) e abre estilizado no navegador do celular —
+      é aditivo: se falhar, a resposta em texto (lista de pedidos) sai do mesmo jeito
 - [ ] latência ponta-a-ponta aceitável p/ a demo; mitigações de ban/QR-loop (§11.3)
 - [ ] domínio próprio + SSL válido (Traefik) + whitelist com o TI 48h antes (MANIFESTO)
 

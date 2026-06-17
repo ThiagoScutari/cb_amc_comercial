@@ -22,6 +22,7 @@ ADIADO COM CONSCIÊNCIA, não resolvido.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from fastapi import APIRouter, BackgroundTasks, Request
@@ -30,11 +31,31 @@ from app.agent.tools import Ferramentas
 from app.auth.session import SessaoNegada, resolver_sessao
 from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
+from app.report.resumo_pedidos import gerar_html_pedidos
 from app.voice.fala import para_fala
+
+logger = logging.getLogger("cb_amc_comercial.whatsapp")
 
 _MSG_AUDIO_RUIM = (
     "Não consegui entender o áudio. Pode repetir, por favor? Se preferir, é só mandar por escrito."
 )
+
+# Frases-gatilho (curadas, revisáveis) do resumo visual. Casam a intenção de "visão
+# ampla" (plural/overview), não a consulta de UM pedido específico ("meu pedido 4471").
+_GATILHOS_RESUMO = (
+    "meus pedidos",
+    "resumo de pedidos",
+    "resumo dos pedidos",
+    "status dos pedidos",
+    "todos os pedidos",
+    "lista de pedidos",
+    "lista dos pedidos",
+)
+
+
+def _quer_resumo_visual(texto: str | None) -> bool:
+    t = (texto or "").lower()
+    return any(g in t for g in _GATILHOS_RESUMO)
 
 
 @dataclass(frozen=True)
@@ -139,6 +160,27 @@ class Dispatcher:
                 audio_out = await self.sintetizador.sintetizar(para_fala(resposta))
                 if audio_out:  # áudio None ⇒ o texto JÁ saiu acima (contrato Fase 7)
                     await self.client.enviar_audio(msg.telefone, audio_out)
+            # ADITIVO: resumo visual em HTML (diferencial da demo). Roda DEPOIS do texto
+            # já garantido; QUALQUER falha (geração ou envio) degrada em silêncio — o
+            # cliente já recebeu a resposta em texto (listando os pedidos). Nunca quebra.
+            if _quer_resumo_visual(texto):
+                await self._enviar_resumo_html(msg.telefone, repo, sessao.cliente_id, sessao.nome)
+
+    async def _enviar_resumo_html(self, telefone, repo, cliente_id: int, nome: str | None) -> None:
+        """Gera e envia o resumo visual (HTML/documento). ADITIVO e best-effort: todo o
+        corpo é envolto em try/except — falha de geração ou de envio NÃO derruba o fluxo
+        (o texto já saiu). anti-IDOR: listar_pedidos filtra pelo cliente_id da sessão."""
+        try:
+            pedidos = repo.listar_pedidos(cliente_id)  # só os pedidos deste cliente
+            html = gerar_html_pedidos(nome or "Cliente", pedidos)
+            await self.client.enviar_documento(
+                telefone,
+                html.encode("utf-8"),
+                filename="Resumo de Pedidos.html",
+                caption="Aqui está o resumo dos seus pedidos.",
+            )
+        except Exception as exc:  # noqa: BLE001 - ADITIVO: o HTML nunca pode derrubar o fluxo (§15)
+            logger.warning("resumo HTML falhou (aditivo, ignorado): %s", str(exc)[:120])
 
     async def aclose(self) -> None:
         fechar = getattr(self.client, "aclose", None)

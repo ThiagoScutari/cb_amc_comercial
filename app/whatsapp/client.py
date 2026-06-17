@@ -28,6 +28,15 @@ class EnvioWhatsApp(Protocol):
 
     async def enviar_texto(self, telefone: str, texto: str) -> bool: ...
     async def enviar_audio(self, telefone: str, audio: bytes) -> bool: ...
+    async def enviar_documento(
+        self,
+        telefone: str,
+        conteudo: bytes,
+        *,
+        filename: str,
+        mimetype: str = "text/html",
+        caption: str | None = None,
+    ) -> bool: ...
     async def buscar_audio(self, mensagem: dict) -> bytes | None: ...
 
 
@@ -66,6 +75,32 @@ class EvolutionClient:
         r = await self._post(
             f"/message/sendWhatsAppAudio/{self.instancia}", {"number": telefone, "audio": b64}
         )
+        return r is not None
+
+    async def enviar_documento(
+        self,
+        telefone: str,
+        conteudo: bytes,
+        *,
+        filename: str,
+        mimetype: str = "text/html",
+        caption: str | None = None,
+    ) -> bool:
+        """Envia um arquivo (ex.: HTML) como DOCUMENTO via sendMedia (data-URI base64).
+
+        Padrão provado em produção (chatbot_cm). base64 direto da memória, sem disco.
+        Degrada para False em erro — é ADITIVO; o texto já saiu antes (router.py)."""
+        b64 = base64.b64encode(conteudo).decode("ascii")
+        payload: dict[str, Any] = {
+            "number": telefone,
+            "mediatype": "document",
+            "mimetype": mimetype,
+            "media": f"data:{mimetype};base64,{b64}",
+            "fileName": filename,
+        }
+        if caption is not None:
+            payload["caption"] = caption
+        r = await self._post(f"/message/sendMedia/{self.instancia}", payload)
         return r is not None
 
     async def buscar_audio(self, mensagem: dict) -> bytes | None:
