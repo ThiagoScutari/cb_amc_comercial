@@ -7,6 +7,8 @@ normalização de telefone e contratos de design.
 
 import pytest
 from app.agent.tools import (
+    PARAMS_TOOLS,
+    ClienteView,
     EscalonamentoView,
     EstoqueView,
     Ferramentas,
@@ -25,6 +27,23 @@ def repo(session) -> MockRepository:
     popular(session)
     session.flush()
     return MockRepository(session)
+
+
+# ---------- dados do cliente (S09a) ----------
+def test_consultar_dados_cliente_expoe_so_condicao_e_cidade(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_dados_cliente()
+    assert isinstance(v, ClienteView)
+    assert v.condicao_pagamento == "28/35/42 dias"  # cliente-demo (Boutique Aurora)
+    assert v.cidade_uf == "Belo Horizonte/MG"
+    # exposição MÍNIMA: NADA sensível/interno vaza na view
+    campos = ClienteView.model_fields.keys()
+    assert "cnpj" not in campos and "razao_social" not in campos
+    assert "telefone_whatsapp" not in campos and "nome_fantasia" not in campos
+
+
+def test_consultar_dados_cliente_tool_nao_tem_parametros(repo):
+    # schema sem cliente_id (nem qualquer param): o id vem do código (princípio 2).
+    assert PARAMS_TOOLS["consultar_dados_cliente"] == frozenset()
 
 
 # ---------- leitura própria ----------

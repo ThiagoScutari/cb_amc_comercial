@@ -62,6 +62,7 @@ class DadosRepository(Protocol):
         self, cliente_id: int, filtro_status: StatusPedido | None = None
     ) -> list[Pedido]: ...
     def listar_solicitacoes(self, cliente_id: int) -> list[Solicitacao]: ...
+    def dados_cliente(self, cliente_id: int) -> Cliente | None: ...
 
     # --- ESCRITA (intake): só REGISTRA, NÃO muta pedido/estoque ---
     def registrar_cancelamento(
@@ -149,6 +150,13 @@ class MockRepository:
                 stmt = stmt.where(Produto.tamanho == tamanho)
         stmt = stmt.order_by(Produto.sku).limit(50)
         return [(p, e) for p, e in self.session.execute(stmt).all()]
+
+    def dados_cliente(self, cliente_id: int) -> Cliente | None:
+        # Filtra pelo cliente_id da sessão: estruturalmente impossível ler outro cliente
+        # (o tool não tem parâmetro; o id vem do código — anti-IDOR, §2.3).
+        return self.session.scalars(
+            select(Cliente).where(Cliente.id == cliente_id)
+        ).one_or_none()
 
     def cliente_por_telefone(self, telefone: str) -> Cliente | None:
         # NÃO decide política: retorna Cliente|None. A decisão sobre None (escalar

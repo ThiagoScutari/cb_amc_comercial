@@ -8,7 +8,7 @@ Seed: cliente 1 = demo (dono dos pedidos 4471..4479); cliente 2 = Maré Alta.
 """
 
 import pytest
-from app.agent.tools import Ferramentas, NaoEncontrado, PedidoView
+from app.agent.tools import ClienteView, Ferramentas, NaoEncontrado, PedidoView
 from app.data.db import recriar_schema
 from app.data.repository import MockRepository
 from app.data.seed import popular
@@ -84,6 +84,20 @@ def test_idor_cliente_id_inexistente_retorna_none(repo):
 def test_pedido_inexistente_retorna_none(repo):
     # idêntico ao IDOR: inexistente também é None (não dá p/ distinguir).
     assert repo.consultar_pedido(cliente_id=1, numero_pedido=999999) is None
+
+
+# ---------- dados do cliente (S09a) — cada sessão só vê a própria conta ----------
+def test_idor_dados_cliente_so_da_propria_sessao(repo):
+    # cliente 2 (Maré Alta) NUNCA enxerga a condição do cliente 1 (Boutique Aurora).
+    v = Ferramentas(repo, cliente_id=2).consultar_dados_cliente()
+    assert isinstance(v, ClienteView)
+    assert v.condicao_pagamento == "à vista" and v.cidade_uf == "Vitória/ES"  # do cliente 2
+    assert v.condicao_pagamento != "28/35/42 dias"  # nunca a do cliente 1
+
+
+def test_dados_cliente_proprio_em_postgres(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_dados_cliente()
+    assert v.condicao_pagamento == "28/35/42 dias" and v.cidade_uf == "Belo Horizonte/MG"
 
 
 # ---------- controles positivos ----------

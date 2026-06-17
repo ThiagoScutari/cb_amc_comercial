@@ -19,7 +19,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from app.data.models import Pedido, Solicitacao, StatusPedido
+from app.data.models import Cliente, Pedido, Solicitacao, StatusPedido
 from app.data.repository import DadosRepository
 from app.ops.escalation import registrar_escalonamento
 
@@ -111,6 +111,17 @@ class EscalonamentoView(BaseModel):
     motivo: str
 
 
+class ClienteView(BaseModel):
+    # Exposição MÍNIMA: só dado comercial não-sensível da conta da SESSÃO. NÃO inclui
+    # CNPJ, razão social, telefone nem nada interno (princípio do menor privilégio).
+    condicao_pagamento: str
+    cidade_uf: str
+
+    @classmethod
+    def from_model(cls, c: Cliente) -> ClienteView:
+        return cls(condicao_pagamento=c.condicao_pagamento, cidade_uf=c.cidade_uf)
+
+
 @dataclass
 class Ferramentas:
     repo: DadosRepository
@@ -165,6 +176,13 @@ class Ferramentas:
             )
             for prod, est in achados
         ]
+
+    def consultar_dados_cliente(self) -> ClienteView | NaoEncontrado:
+        # cliente_id da SESSÃO, nunca do modelo: a tool NÃO tem parâmetros (princípio 2).
+        c = self.repo.dados_cliente(self.cliente_id)
+        if c is None:
+            return NaoEncontrado(mensagem="Não consegui localizar os dados da sua conta.")
+        return ClienteView.from_model(c)
 
     # --- INTAKE: registra + avisa (NÃO executa, NÃO muta) ---
     def solicitar_cancelamento(
@@ -302,6 +320,20 @@ TOOL_DEFS: list[dict] = [
                 }
             },
             "required": ["itens"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_dados_cliente",
+        "description": (
+            "Informa dados comerciais da conta de quem está falando: condição de "
+            "pagamento e cidade. Use para 'qual minha condição de pagamento?'. NÃO recebe "
+            "parâmetros — é sempre a conta do próprio cliente da conversa."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
