@@ -4,8 +4,9 @@
 **Cliente:** Oasis Resortwear — marca do grupo **AMC Têxtil** (contato: **Luis**, gerente de TI)
 **Nome do projeto / pasta:** `cb_amc_comercial` — **projeto novo**, sem relação com outros. Portas a reservar como nova entrada no `PORT-REGISTRY` (app 8005 / Evolution 8103 / Postgres 5438).
 **Consultoria:** Thiago Scutari Consultoria
-**Versão:** 2.2
+**Versão:** 2.3
 **Data:** Junho 2026
+**Changelog v2.3:** Fases 7 (TTS ElevenLabs) e 8 (webhook+dispatcher ponta a ponta) fechadas — integração completa, 139 testes. §7.2: registrada a dívida de segurança consciente do webhook (POST público sem auth no MVP; shared-secret na V2). Pendência de host: DEMO_PHONE real no seed, conexão Evolution.
 **Changelog v2.2:** consistência interna — removidas referências obsoletas a `categoria_cod` fora dos changelogs (§5.6 e plano de build agora usam `tipo_cod`/âncora-direita, alinhados à regra v1.9). Fase 6 (STT) fechada.
 **Changelog v2.1:** Fases 4 e 5 fechadas (agente tool-use + intake read-only, IDOR de escrita e não-mutação testados). §11.4: registrado o risco de demo do STT/TTS (única dependência de rede externa ao vivo na voz) com plano B obrigatório = texto no mesmo loop.
 **Changelog v2.0:** Fase 1 (modelo+catálogo+seed) fechada e verde (47 testes). Exemplos do §10 alinhados aos SKUs REAIS do seed (camiseta branca M 340103413; bermuda bege 30103321) — não inventar produto fora do fixture; demo roda sobre dado real. Pendências à parte: acessórios/Unissex (re-captura) e telefone do cliente-demo (DEMO_PHONE, Fase 8).
@@ -330,6 +331,7 @@ Ao chegar uma mensagem, o **código** resolve `telefone_whatsapp → cliente_id`
 - **Injeção de prompt:** defesas no System Prompt reduzem frequência; a defesa real é o filtro por `cliente_id` e a checagem de permissão no código (2.3).
 - **Número não identificado:** não atender com dados; escalar.
 - **Dados sensíveis:** logs com retenção mínima desde já (ver seção 12).
+- **DÍVIDA DE SEGURANÇA CONSCIENTE (webhook, S08):** o `POST /webhook/whatsapp` é endpoint **público sem autenticação** no MVP. Risco residual baixo (URL não divulgada; a auth fail-closed já barra números desconhecidos), mas um payload forjado poderia simular mensagem de qualquer telefone. **Adiado com consciência, não resolvido** — na V2, exigir um shared-secret/token em header ou no path. Registrado no topo do `router.py`.
 
 ---
 
@@ -698,5 +700,5 @@ LOG_LEVEL=INFO
 
 ---
 
-*Thiago Scutari Consultoria — spec.md v2.2 — Junho 2026*
+*Thiago Scutari Consultoria — spec.md v2.3 — Junho 2026*
 *Contexto-mestre para o Claude Code. Reler antes de cada fase; não violar os princípios da seção 2.*
