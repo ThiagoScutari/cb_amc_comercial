@@ -14,6 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Código da aplicação.
 COPY app/ ./app/
 
+# Scripts operacionais (seed, cadastro de cliente-demo) — rodados via
+# `docker compose exec app python -m scripts.<nome>`. Sem isto, scripts/ não
+# entra na imagem. O fixture do catálogo já vai em app/data/colcci_products.json.
+COPY scripts/ ./scripts/
+
 # Não rodar como root (boa prática / bandit-friendly).
 RUN useradd --create-home --uid 1000 appuser \
     && chown -R appuser /app
