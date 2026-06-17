@@ -1,8 +1,11 @@
 """Loader do catálogo Colcci: fixture JSON -> list[Produto]. SEM REDE.
 
-Código de produção. Lê o snapshot congelado em tests/fixtures/colcci_products.json
+Código de produção. Lê o snapshot congelado em app/data/colcci_products.json
 (fonte de verdade da demo, §5.6) e constrói objetos `Produto`. NUNCA chama Firecrawl
 — a captura ao vivo vive em scripts/capture_colcci.py, rodada sob demanda.
+
+O snapshot vive em app/data/ (não em tests/) porque é dado de PRODUÇÃO consumido
+em runtime pelo seed: assim ele entra na imagem Docker via `COPY app/`.
 
 Reusa `parse_ref_produto` (models.py): deriva categoria_cod/marca_cod/ordem só quando
 o ref tem 9 dígitos; para 8 dígitos, deixa null (degrada, nunca inventa — §5.2).
@@ -17,7 +20,7 @@ from pathlib import Path
 
 from app.data.models import Produto, parse_ref_produto
 
-FIXTURE_PADRAO = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "colcci_products.json"
+FIXTURE_PADRAO = Path(__file__).resolve().parent / "colcci_products.json"
 
 
 def _preco_para_decimal(valor: str | None) -> Decimal | None:

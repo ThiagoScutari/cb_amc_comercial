@@ -2,8 +2,8 @@
 """Captura exploratória do catálogo Colcci via Firecrawl (scraping).
 
 STANDALONE — vive em scripts/, fora de app/. NÃO é importado pelo app nem pelos
-testes. Roda manualmente para popular tests/fixtures/colcci_products.json; os
-testes e o seed leem SOMENTE o fixture, nunca chamam Firecrawl ao vivo.
+testes. Roda manualmente para popular app/data/colcci_products.json; os testes e
+o seed leem SOMENTE o fixture, nunca chamam Firecrawl ao vivo.
 
 Por que scraping e não a API VTEX: a API pública de catálogo da Colcci não expõe
 os produtos (redireciona para a busca textual do storefront / 403 sem User-Agent),
@@ -39,7 +39,7 @@ BROWSER_UA = (
 SLEEP_S = 1.5  # cortesia: throttle entre chamadas
 PER_GENERO_PRODUTOS = 14  # ~14 produtos × ~4 tamanhos × 2 gêneros ≈ ~110 SKUs
 PER_LISTAGEM = 3  # cap por listagem -> espalha por categoria (paleta/cor mais ricas)
-FIXTURE = ROOT / "tests" / "fixtures" / "colcci_products.json"
+FIXTURE = ROOT / "app" / "data" / "colcci_products.json"
 
 # Listagens reais (descobertas via Firecrawl /map). Só listagens COM gênero na URL
 # — fonte confiável p/ o campo `genero` (NOT NULL). Variedade de categoria garante

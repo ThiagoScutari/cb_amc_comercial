@@ -1,6 +1,6 @@
 """Testes do loader do catálogo (app/data/catalogo.py).
 
-Lê SOMENTE o fixture congelado (tests/fixtures/colcci_products.json); nunca chama
+Lê SOMENTE o fixture congelado (app/data/colcci_products.json); nunca chama
 Firecrawl. Casos de borda usam fixtures temporários (tmp_path).
 """
 

@@ -245,7 +245,7 @@ Os **produtos** do mock vêm do catálogo real da **Colcci**, marca da própria 
 
 **Método (atual):**
 1. **Captura via Firecrawl** (`scripts/capture_colcci.py`, fora do `app/`, não roda no CI): navega listagens de categoria (feminino + masculino), extrai `produto`, `ref_produto`, `cor`, `tamanho`, `preco`, `genero`, `categoria_txt`; normaliza para o schema 5.2 (1 linha = 1 SKU = produto × cor × tamanho). UA de browser + throttle. **Ferramenta de captura, rodada sob demanda — nunca no CI nem no seed.**
-2. **Fixture como fonte de verdade:** salva em `tests/fixtures/colcci_products.json` (snapshot determinístico, congelado para a demo). **Seed e testes leem só do fixture; nunca chamam Firecrawl ao vivo.**
+2. **Fixture como fonte de verdade:** salva em `app/data/colcci_products.json` (snapshot determinístico, congelado para a demo; é dado de PRODUÇÃO lido em runtime pelo seed, por isso vive em `app/` e entra na imagem via `COPY app/`). **Seed e testes leem só do fixture; nunca chamam Firecrawl ao vivo.**
 3. **Caminho oficial (preferível, em paralelo):** pedir ao **Luis (TI/AMC)** um export do catálogo ou credencial VTEX (`appKey`/`appToken` → API `/pvt/` autenticada, sem WAF). Quando chegar, substitui o fixture sem tocar no resto.
 
 **Parse do `ref_produto` (reusa `parse_ref_produto` do `models.py`):** ancora pela direita (ordem=últimos 5, marca=2 antes, `tipo_cod`=resto com `zfill(3)`); ref < 7 díg. → derivados `null` (degradação graciosa, nunca inventa). Ver regra definitiva em 5.2.
@@ -454,6 +454,7 @@ cb_amc_comercial/
 │   │   ├── models.py            # SQLAlchemy: Cliente, Produto, Pedido, PedidoItem, Estoque, Solicitacao
 │   │   ├── repository.py        # interface DadosRepository (porta)
 │   │   ├── mock_repository.py   # implementação Postgres mockado
+│   │   ├── colcci_products.json # snapshot do catálogo Colcci (dado de PRODUÇÃO; entra na imagem via COPY app/)
 │   │   └── seed.py              # popula 10 clientes, pedidos, estoque; produtos vêm do fixture Colcci
 │   │
 │   ├── agent/
@@ -477,12 +478,10 @@ cb_amc_comercial/
 │       └── escalation.py        # fallback para humano
 │
 ├── scripts/
-│   └── capture_colcci.py        # Firecrawl: scraping Colcci → tests/fixtures/colcci_products.json (tooling, fora do CI)
+│   └── capture_colcci.py        # Firecrawl: scraping Colcci → app/data/colcci_products.json (tooling, fora do CI)
 │
 ├── tests/
-│   ├── conftest.py              # fixtures (clientes/produtos/pedidos de teste)
-│   ├── fixtures/
-│   │   └── colcci_products.json # snapshot do catálogo Colcci (cache; testes sem rede)
+│   ├── conftest.py              # fixtures (clientes/produtos/pedidos de teste; pg_session compartilhada)
 │   ├── test_repository.py
 │   ├── test_tools.py            # inclui testes de permissão/IDOR
 │   ├── test_orchestrator.py
@@ -540,7 +539,7 @@ Commit: feat(data): schema mockado (modelos) [S01]
 ━━ FASE 1b — Catálogo Colcci: captura + loader [S01b]
 - AJUSTE NO MODELO (Produto, §5.2): tipo_cod/marca_cod/ordem → NULLABLE; +genero (NOT NULL), +categoria_txt (nullable). create_all recria (sem Alembic).
 - scripts/capture_colcci.py: Firecrawl sobre listagens (fem+masc), normaliza p/ schema, reusa parse_ref_produto (9 díg.→deriva; 8 díg.→null). Tooling, NÃO roda no CI. FIRECRAWL_API_KEY só no .env.
-- Fixture curado e CONGELADO em tests/fixtures/colcci_products.json (~100 SKUs, variedade de categoria/cor).
+- Fixture curado e CONGELADO em app/data/colcci_products.json (~100 SKUs, variedade de categoria/cor).
 - data/catalogo.py: carregar_produtos(fixture) -> list[Produto] (lê JSON, dedup sku, preco→Decimal). Sem rede.
 - testes (lendo fixture): contagem; ref-9 parseado; ref-8 → derivados null; sku único; preco vira Decimal; genero presente
 Commit: feat(data): catálogo Colcci via captura→fixture + loader [S01b]

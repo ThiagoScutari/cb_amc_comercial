@@ -104,7 +104,7 @@ Python 3.12 · FastAPI · Claude API (`AGENT_MODEL=claude-sonnet-4-6`; `ROUTER_M
 
 ## Lembretes pontuais
 
-- **Catálogo Colcci (VTEX):** usar a **API pública** (`/api/catalog_system/pub/products/search`), não raspar HTML (tem anti-bot). **Validar o endpoint com o RefId `360118439`** na Fase 1b antes de popular em lote. Cachear o JSON em `tests/fixtures/colcci_products.json`. *(spec §5.6)*
+- **Catálogo Colcci (VTEX):** usar a **API pública** (`/api/catalog_system/pub/products/search`), não raspar HTML (tem anti-bot). **Validar o endpoint com o RefId `360118439`** na Fase 1b antes de popular em lote. Cachear o JSON em `app/data/colcci_products.json` (dado de produção lido em runtime pelo seed — por isso em `app/`, não em `tests/`). *(spec §5.6)*
 - **Código de produto Colcci:** 9 dígitos = `[categoria 2][marca 2][ordem 5]` (ex.: `36`=Blusa Feminina, `01`=Colcci, `18439`=ordem).
 - **ElevenLabs:** o onboarding (API key, `voice_id`) será fornecido na Fase 7 — pedir antes de codar o TTS.
 - **Identificação por telefone** pode subir de nível depois — deixar `auth/session.py` extensível.
