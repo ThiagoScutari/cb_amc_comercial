@@ -9,39 +9,14 @@ Seed: cliente 1 = demo (dono dos pedidos 4471..4479); cliente 2 = Maré Alta.
 
 import pytest
 from app.agent.tools import ClienteView, Ferramentas, NaoEncontrado, PedidoView
-from app.data.db import recriar_schema
 from app.data.repository import MockRepository
-from app.data.seed import popular
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.postgres
 
 PEDIDOS_DEMO = set(range(4471, 4480))  # do cliente 1
 
-
-@pytest.fixture(scope="module")
-def pg_session():
-    try:
-        from testcontainers.postgres import PostgresContainer
-    except ImportError:  # pragma: no cover
-        pytest.skip("testcontainers não instalado")
-    try:
-        container = PostgresContainer("postgres:15", driver="psycopg")
-        container.start()
-    except Exception as exc:  # pragma: no cover - Docker ausente
-        pytest.skip(f"Docker indisponível: {exc}")
-    try:
-        engine = create_engine(container.get_connection_url())
-        recriar_schema(engine)
-        with Session(engine) as s:
-            popular(s)
-            s.commit()
-        with Session(engine) as s:
-            yield s
-        engine.dispose()
-    finally:
-        container.stop()
+# A fixture `pg_session` (Postgres efêmero + seed real) vive em tests/conftest.py
+# — compartilhada com o teste de regressão da sequence (S10).
 
 
 @pytest.fixture

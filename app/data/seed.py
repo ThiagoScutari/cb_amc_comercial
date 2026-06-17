@@ -22,6 +22,7 @@ import datetime as dt
 from collections import defaultdict
 from decimal import Decimal
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.data.catalogo import carregar_produtos
@@ -261,11 +262,31 @@ def criar_pedido(
     return pedido
 
 
+def _sincronizar_sequence_clientes(session: Session) -> None:
+    """Avança a sequence de `clientes.id` após inserts com id EXPLÍCITO (1..10).
+
+    No Postgres, inserir um id explícito numa coluna serial NÃO move a sequence;
+    o próximo insert AUTO (ex.: cadastrar_demo) tentaria id=1 e colidiria com o
+    seed (UniqueViolation em clientes_pkey). Aqui realinhamos a sequence ao
+    MAX(id) corrente. No-op em SQLite (sem sequence; o ROWID já usa max+1) — por
+    isso o bug só aparece em Postgres, e o teste de regressão roda lá (§A1).
+    """
+    if session.bind.dialect.name != "postgresql":
+        return
+    session.execute(
+        text(
+            "SELECT setval(pg_get_serial_sequence('clientes', 'id'), "
+            "(SELECT MAX(id) FROM clientes))"
+        )
+    )
+
+
 def popular(session: Session) -> None:
     """Popula todas as tabelas em ordem FK-safe, coerente e determinística."""
-    # 1) clientes
+    # 1) clientes (ids explícitos 1..10) + realinhamento da sequence (anti-colisão)
     session.add_all(Cliente(**c) for c in _CLIENTES)
     session.flush()
+    _sincronizar_sequence_clientes(session)
 
     # 2) produtos (catálogo real, do fixture)
     produtos = carregar_produtos()
