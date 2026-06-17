@@ -1,0 +1,26 @@
+# Overlay EXCLUSIVO da VPS — aplicado SOBRE o docker-compose.yml (base, dev-safe).
+#
+# Por que separado e NÃO um docker-compose.override.yml: o override é carregado
+# AUTOMATICAMENTE pelo `docker compose up`, e como ele referencia uma rede
+# `external: true` que NÃO existe na máquina de dev, quebraria o `up` local.
+# Mantendo num arquivo de nome explícito (não auto-carregado), o dev fica intacto:
+#
+#   dev:  docker compose up --build
+#   VPS:  docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+#
+# O que ele faz: coloca app e db na rede externa onde a Evolution já roda, para que
+#   - o nosso app alcance a Evolution por  http://chatbot-imagem-evolution:8080
+#   - a Evolution alcance o nosso webhook por  http://cb_amc_comercial_app:8000
+# `default` continua na lista para o app seguir falando com o db (rede do projeto).
+
+services:
+  cb_amc_comercial_db:
+    networks: [default, rede_traefik]
+
+  cb_amc_comercial_app:
+    networks: [default, rede_traefik]
+
+networks:
+  rede_traefik:
+    external: true
+    name: n8n-traefik_app_network

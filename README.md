@@ -59,6 +59,31 @@ docker compose up --build  # app em http://localhost:8005/health
 `DATABASE_URL` usa o nome do container (`cb_amc_comercial_db`), nunca `localhost`.
 Rodar com **`--workers 1`** (o histórico do MVP é em memória — ver `spec.md`/orchestrator).
 
+Depois de subir, popular o banco e (opcional) cadastrar um cliente-demo — `scripts/`
+já vai na imagem:
+
+```bash
+docker compose exec app python -m app.data.seed
+docker compose exec app python -m scripts.cadastrar_demo --telefone "5547999998888" --nome "Boutique do João"
+```
+
+### Deploy na VPS (rede externa da Evolution)
+
+Na VPS o app e o db precisam entrar na rede Docker **externa** onde a Evolution já
+roda (`n8n-traefik_app_network`), para que o app alcance a Evolution por
+`http://chatbot-imagem-evolution:8080` e a Evolution alcance o nosso webhook por
+`http://cb_amc_comercial_app:8000`. Esse ajuste vive no overlay
+**`docker-compose.vps.yml`** — aplicado SÓ na VPS, com dois `-f`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
+```
+
+O `docker-compose.yml` base fica **dev-safe** (sem rede externa): `docker compose up`
+local continua funcionando sem essa rede. O overlay NÃO é um `docker-compose.override.yml`
+de propósito — o override seria auto-carregado e quebraria o `up` local (rede externa
+inexistente). A rede externa precisa existir antes na VPS (`docker network ls`).
+
 ## Conectar o WhatsApp (Evolution) — no host
 
 1. Subir a stack (acima). A Evolution responde na porta `8103`.
