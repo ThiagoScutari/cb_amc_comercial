@@ -154,9 +154,7 @@ class MockRepository:
     def dados_cliente(self, cliente_id: int) -> Cliente | None:
         # Filtra pelo cliente_id da sessão: estruturalmente impossível ler outro cliente
         # (o tool não tem parâmetro; o id vem do código — anti-IDOR, §2.3).
-        return self.session.scalars(
-            select(Cliente).where(Cliente.id == cliente_id)
-        ).one_or_none()
+        return self.session.scalars(select(Cliente).where(Cliente.id == cliente_id)).one_or_none()
 
     def cliente_por_telefone(self, telefone: str) -> Cliente | None:
         # NÃO decide política: retorna Cliente|None. A decisão sobre None (escalar

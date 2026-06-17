@@ -32,8 +32,7 @@ from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
 
 _MSG_AUDIO_RUIM = (
-    "Não consegui entender o áudio. Pode repetir, por favor? "
-    "Se preferir, é só mandar por escrito."
+    "Não consegui entender o áudio. Pode repetir, por favor? Se preferir, é só mandar por escrito."
 )
 
 

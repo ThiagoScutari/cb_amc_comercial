@@ -81,9 +81,7 @@ def _proxima_faixa(session: Session) -> int:
 
 def _faixa_do_cliente(session: Session, cliente_id: int) -> int:
     menor = session.scalar(
-        select(func.min(Pedido.id)).where(
-            Pedido.cliente_id == cliente_id, Pedido.id >= FAIXA_BASE
-        )
+        select(func.min(Pedido.id)).where(Pedido.cliente_id == cliente_id, Pedido.id >= FAIXA_BASE)
     )
     return menor if menor is not None else _proxima_faixa(session)
 

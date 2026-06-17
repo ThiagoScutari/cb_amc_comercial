@@ -25,9 +25,7 @@ def repo(session) -> MockRepository:
 
 
 def _pedidos(session, cliente_id) -> list[Pedido]:
-    return list(
-        session.scalars(select(Pedido).where(Pedido.cliente_id == cliente_id)).all()
-    )
+    return list(session.scalars(select(Pedido).where(Pedido.cliente_id == cliente_id)).all())
 
 
 # ---------- criação + invariantes ----------
