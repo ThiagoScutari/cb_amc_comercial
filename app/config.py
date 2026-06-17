@@ -24,8 +24,11 @@ class Settings(BaseSettings):
 
     # --- STT / TTS ---
     openai_api_key: str = ""  # Whisper (STT)
-    elevenlabs_api_key: str = ""  # TTS — obter na Fase 7
-    elevenlabs_voice_id: str = ""  # voz PT-BR — definir na Fase 7
+    elevenlabs_api_key: str = ""  # TTS — segredo, só no .env (gitignored)
+    elevenlabs_voice_id: str = ""  # voz PT-BR escolhida
+    # qualidade×latência configurável: eleven_flash_v2_5 (rápido) vs eleven_multilingual_v2
+    elevenlabs_model: str = "eleven_flash_v2_5"
+    elevenlabs_output_format: str = "mp3_44100_128"  # MP3 no fio; Evolution converte p/ ptt opus
 
     # --- WhatsApp (Evolution) ---
     evolution_api_url: str = ""
