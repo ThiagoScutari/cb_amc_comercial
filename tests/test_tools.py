@@ -14,6 +14,7 @@ from app.agent.tools import (
     Ferramentas,
     NaoEncontrado,
     PedidoView,
+    ProdutoView,
     SolicitacaoView,
 )
 from app.data.models import Cliente, Estoque, Pedido, Solicitacao
@@ -53,6 +54,22 @@ def test_consultar_pedido_proprio_com_itens(repo):
     assert v.numero == 4471
     assert v.faturado is False
     assert len(v.itens) >= 1
+
+
+def test_item_do_pedido_expoe_refid_real(repo):
+    # O item do pedido 4471 é o SKU 340103413-M; o RefId é o real do catálogo,
+    # derivado do sku (sem o sufixo de tamanho). É o que o lojista usa no sistema dele.
+    v = Ferramentas(repo, cliente_id=1).consultar_pedido(4471)
+    item = next(it for it in v.itens if it.sku == "340103413-M")
+    assert item.ref_produto == "340103413"
+    assert "ref_produto" in item.model_dump()  # exposto na borda (serializa p/ o modelo)
+
+
+def test_busca_produto_expoe_refid(repo):
+    vistas = Ferramentas(repo, cliente_id=1).buscar_produto("camiseta")
+    assert vistas and all(isinstance(v, ProdutoView) for v in vistas)
+    # ref_produto presente e não-vazio em toda peça retornada (nunca inventado: vem do catálogo).
+    assert all(v.ref_produto for v in vistas)
 
 
 def test_consultar_pedido_de_outro_cliente_nao_encontrado(repo):

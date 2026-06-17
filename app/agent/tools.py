@@ -26,6 +26,7 @@ from app.ops.escalation import registrar_escalonamento
 
 class PedidoItemView(BaseModel):
     sku: str
+    ref_produto: str  # RefId Colcci (ex.: "340103413") — como o lojista B2B identifica a peça
     produto: str
     cor: str
     tamanho: str
@@ -52,6 +53,7 @@ class PedidoView(BaseModel):
             itens=[
                 PedidoItemView(
                     sku=it.sku.sku,
+                    ref_produto=it.sku.ref_produto,
                     produto=it.sku.produto,
                     cor=it.sku.cor,
                     tamanho=it.sku.tamanho,
@@ -72,6 +74,7 @@ class PedidoResumo(BaseModel):
 
 class ProdutoView(BaseModel):
     sku: str
+    ref_produto: str  # RefId Colcci — referência que o lojista usa no sistema dele
     produto: str
     cor: str
     tamanho: str
@@ -148,6 +151,7 @@ class Ferramentas:
         return [
             ProdutoView(
                 sku=p.sku,
+                ref_produto=p.ref_produto,
                 produto=p.produto,
                 cor=p.cor,
                 tamanho=p.tamanho,
