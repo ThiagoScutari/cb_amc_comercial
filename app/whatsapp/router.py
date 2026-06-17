@@ -30,6 +30,7 @@ from app.agent.tools import Ferramentas
 from app.auth.session import SessaoNegada, resolver_sessao
 from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
+from app.voice.fala import para_fala
 
 _MSG_AUDIO_RUIM = (
     "Não consegui entender o áudio. Pode repetir, por favor? Se preferir, é só mandar por escrito."
@@ -133,7 +134,9 @@ class Dispatcher:
             )
             await self.client.enviar_texto(msg.telefone, resposta)  # TEXTO SEMPRE (a garantia)
             if origem_audio:  # espelha o canal (§8.3): áudio entra -> áudio sai (best-effort)
-                audio_out = await self.sintetizador.sintetizar(resposta)
+                # Texto formatado -> falável (números/datas por extenso) ANTES do TTS.
+                # MESMO conteúdo, só a forma muda (porta única). para_fala degrada sozinho.
+                audio_out = await self.sintetizador.sintetizar(para_fala(resposta))
                 if audio_out:  # áudio None ⇒ o texto JÁ saiu acima (contrato Fase 7)
                     await self.client.enviar_audio(msg.telefone, audio_out)
 

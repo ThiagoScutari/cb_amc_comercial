@@ -78,9 +78,11 @@ class FakeSintetizador:
     def __init__(self, audio: bytes | None = b"mp3-bytes"):
         self.audio = audio
         self.chamadas = 0
+        self.textos: list[str] = []  # captura o que o TTS recebeu (prova do para_fala)
 
     async def sintetizar(self, texto):
         self.chamadas += 1
+        self.textos.append(texto)
         return self.audio
 
 
@@ -223,6 +225,16 @@ async def test_audio_autenticado_transcreve_responde_e_espelha_audio():
     assert orq.chamadas[0]["origem_audio"] is True  # ativa o read-back de números
     assert client.textos == [(_TEL, "resposta do agente")]  # TEXTO sempre
     assert client.audios == [(_TEL, b"mp3")]  # áudio entra -> áudio sai
+
+
+async def test_audio_fala_por_extenso_texto_continua_formatado():
+    # Porta única: o TEXTO sai formatado (dígitos); o ÁUDIO é o MESMO conteúdo, mas
+    # números por extenso (para_fala roda entre responder() e sintetizar()).
+    disp, client, orq, stt, tts = _make()
+    orq.resposta = "Seu pedido tem 200 peças."
+    await disp.processar(_audio_payload())
+    assert client.textos == [(_TEL, "Seu pedido tem 200 peças.")]  # texto: formatado, verbatim
+    assert tts.textos == ["Seu pedido tem duzentas peças."]  # áudio: derivado, por extenso
 
 
 async def test_audio_que_nao_baixa_pede_para_repetir_sem_chamar_agente():
