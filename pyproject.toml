@@ -19,11 +19,14 @@ select = ["E", "W", "F", "I", "UP", "B"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
-addopts = "--cov=app --cov-report=term-missing --cov-fail-under=70"
+# -m "not eval": o CI e o `pytest` normal NUNCA rodam as evals (batem na Claude API,
+# têm custo e são não-determinísticas). Rodar evals sob demanda: `pytest -m eval`.
+addopts = "--cov=app --cov-report=term-missing --cov-fail-under=70 -m \"not eval\""
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "postgres: testes de IDOR em Postgres real (testcontainers; exigem Docker)",
+    "eval: evals de comportamento contra a Claude API REAL (custo; fora do CI)",
 ]
 
 [tool.coverage.run]

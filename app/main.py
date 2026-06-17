@@ -18,6 +18,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from app.logging_config import configurar_logging
 from app.whatsapp.router import criar_router
 
 logger = logging.getLogger("cb_amc_comercial.main")
@@ -25,6 +26,7 @@ logger = logging.getLogger("cb_amc_comercial.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    configurar_logging()
     try:
         from app.whatsapp.factory import criar_dispatcher
 
