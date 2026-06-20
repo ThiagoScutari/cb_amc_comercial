@@ -86,16 +86,19 @@ class EvolutionClient:
         mimetype: str = "text/html",
         caption: str | None = None,
     ) -> bool:
-        """Envia um arquivo (ex.: HTML) como DOCUMENTO via sendMedia (data-URI base64).
+        """Envia um arquivo (ex.: HTML) como DOCUMENTO via sendMedia (base64 PURO).
 
-        Padrão provado em produção (chatbot_cm). base64 direto da memória, sem disco.
+        base64 direto da memória, sem disco. O campo `media` recebe SÓ os caracteres
+        base64 — NÃO um data-URI: a Evolution v2.3.7 rejeita `data:...;base64,...` com
+        400 {"message":["Owned media must be a url or base64"]} (confirmado em produção;
+        base64 puro retorna 201 com documentMessage criado).
         Degrada para False em erro — é ADITIVO; o texto já saiu antes (router.py)."""
         b64 = base64.b64encode(conteudo).decode("ascii")
         payload: dict[str, Any] = {
             "number": telefone,
             "mediatype": "document",
             "mimetype": mimetype,
-            "media": f"data:{mimetype};base64,{b64}",
+            "media": b64,
             "fileName": filename,
         }
         if caption is not None:

@@ -415,7 +415,7 @@ async def test_enviar_audio_manda_base64():
     await cli.aclose()
 
 
-async def test_enviar_documento_monta_sendmedia_com_data_uri():
+async def test_enviar_documento_monta_sendmedia_com_base64_puro():
     capturado = {}
 
     def handler(request):
@@ -434,7 +434,9 @@ async def test_enviar_documento_monta_sendmedia_com_data_uri():
     assert j["mediatype"] == "document" and j["mimetype"] == "text/html"
     assert j["fileName"] == "Resumo.html" and j["caption"] == "Seu resumo"
     b64 = base64.b64encode(b"<html>x</html>").decode("ascii")
-    assert j["media"] == f"data:text/html;base64,{b64}"
+    # Evolution v2.3.7 exige base64 PURO; data-URI ("data:...;base64,...") é rejeitado com 400.
+    assert j["media"] == b64
+    assert not j["media"].startswith("data:")
     await cli.aclose()
 
 
