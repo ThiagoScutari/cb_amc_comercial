@@ -15,7 +15,7 @@ from app.config import Settings, get_settings
 from app.data.db import criar_engine, criar_sessionmaker
 from app.voice.stt import Transcritor
 from app.voice.tts import Sintetizador
-from app.whatsapp.client import EvolutionClient
+from app.whatsapp.client import WhatsAppCloudClient
 from app.whatsapp.router import Dispatcher
 
 
@@ -27,11 +27,13 @@ def criar_dispatcher(settings: Settings | None = None) -> Dispatcher:
     from elevenlabs.client import AsyncElevenLabs
     from openai import AsyncOpenAI
 
-    client = EvolutionClient(
+    # WhatsApp Cloud API (Meta). # TODO: aguardando token permanente da Meta —
+    # enquanto o .env tiver o placeholder, as chamadas voltam 401 e degradam (log + False).
+    client = WhatsAppCloudClient(
         httpx.AsyncClient(timeout=30.0),
-        base_url=s.evolution_api_url,
-        apikey=s.evolution_api_key,
-        instancia=s.evolution_instance,
+        access_token=s.whatsapp_access_token,
+        phone_number_id=s.whatsapp_phone_number_id,
+        api_version=s.whatsapp_api_version,
     )
     orquestrador = Orquestrador(
         AsyncAnthropic(api_key=s.anthropic_api_key), HistoricoMemoria(), s.agent_model
