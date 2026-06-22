@@ -6,7 +6,7 @@ anthropic==0.96.0
 openai==2.32.0
 elevenlabs==2.53.0      # TTS de saída (voz PT-BR); client real montado na factory da Fase 8
 pydantic==2.10.3
-pydantic-settings==2.14.0
+pydantic-settings==2.14.2      # 2.14.0 tinha GHSA-4xgf-cpjx-pc3j (pip-audit) — bump p/ 2.14.2
 sqlalchemy==2.0.36
 psycopg[binary]==3.2.3          # driver Postgres (psycopg3, uso síncrono)
 httpx==0.28.1
