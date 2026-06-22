@@ -1,40 +1,56 @@
-"""Webhook do WhatsApp (Evolution) + dispatcher — orquestra o fluxo ponta a ponta.
+"""Webhook do WhatsApp (Cloud API / Meta) + dispatcher — orquestra o fluxo ponta a ponta.
 
 A AUTH é a PORTA ÚNICA (Fase 3): texto e ÁUDIO só chegam ao agente depois de
 `SessaoAutenticada`; `Ferramentas` recebe o `cliente_id` da sessão, nunca do payload.
 Garantia de saída: o TEXTO sai SEMPRE; o áudio é ADITIVO e best-effort (contrato da
 Fase 7: áudio None ⇒ texto entregue). Espelho de canal (§8.3): áudio→áudio, texto→texto.
 
+WEBHOOK DA CLOUD API — dois comportamentos no MESMO path:
+- GET: verificação inicial. A Meta chama com `hub.mode`/`hub.verify_token`/`hub.challenge`.
+  Token confere -> devolve o challenge (200, texto puro); senão 403.
+- POST: recebimento. Payload `entry[].changes[].value.messages[]` (ver `extrair_mensagem`).
+  Eventos de status (entregue/lido) chegam SEM `messages` (vêm em `statuses`) -> ignora.
+  Não existe `fromMe`: as nossas próprias mensagens voltam como `statuses`, não `messages`,
+  então não há eco a filtrar.
+
+SEGURANÇA — assinatura do webhook (§6/§7): o header `X-Hub-Signature-256` é HMAC-SHA256
+do corpo cru com o `WHATSAPP_APP_SECRET`. Validado ANTES de qualquer parse. Quando o
+APP_SECRET ainda não foi preenchido (placeholder), a validação é PULADA com um WARNING
+explícito — para não travar o dev/demo enquanto o segredo não chega. O `cliente_id`
+continua vindo só da sessão (anti-IDOR), nunca do payload.
+
 RESILIÊNCIA (§15):
-- O webhook responde SEMPRE 200 (mesmo corpo malformado) p/ não disparar retry storm
-  da Evolution.
+- O webhook responde SEMPRE 200 em corpo malformado/JSON inválido p/ não disparar retry
+  storm da Meta (assinatura inválida com secret configurado é a única exceção -> 403).
 - O processamento real roda em BACKGROUND (ack imediato): como o LLM+TTS levam segundos,
   processar síncrono arriscaria timeout→reenvio.
 - A task de background tem o SEU PRÓPRIO try/except amplo: depois do 200 o erro não tem
   mais pra onde voltar, então a task NUNCA pode crashar calada — loga + degrada.
-- Anti-eco: mensagem `fromMe=true` (nossa própria) é ignorada, senão o bot conversaria
-  consigo mesmo num loop.
-
-DÍVIDA DE SEGURANÇA CONSCIENTE (F1): o webhook é um POST PÚBLICO SEM autenticação no
-MVP. Um shared-secret em header (validado aqui) é trivial e deve entrar na V2. Está
-ADIADO COM CONSCIÊNCIA, não resolvido.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 from dataclasses import dataclass
 
 from fastapi import APIRouter, BackgroundTasks, Request
+from fastapi.responses import PlainTextResponse
 
 from app.agent.tools import Ferramentas
 from app.auth.session import SessaoNegada, resolver_sessao
+from app.config import Settings, get_settings
 from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
 from app.report.resumo_pedidos import gerar_html_pedidos
 from app.voice.fala import para_fala
 
 logger = logging.getLogger("cb_amc_comercial.whatsapp")
+
+# Emite o WARNING de "assinatura não validada" só UMA vez por processo (não a cada POST).
+_aviso_assinatura_emitido = False
 
 _MSG_AUDIO_RUIM = (
     "Não consegui entender o áudio. Pode repetir, por favor? Se preferir, é só mandar por escrito."
@@ -60,9 +76,9 @@ def _quer_resumo_visual(texto: str | None) -> bool:
 
 @dataclass(frozen=True)
 class MensagemRecebida:
-    telefone: str  # cru (remoteJid sem o sufixo); o repo normaliza
+    telefone: str  # E.164 sem `+` (campo `from`); o repo normaliza
     texto: str | None  # presente se for mensagem de texto
-    audio_raw: dict | None  # o objeto `data` p/ buscar_audio, se for áudio
+    audio_raw: dict | None  # a própria mensagem (tem `audio.id`) p/ buscar_audio, se for áudio
 
     @property
     def is_audio(self) -> bool:
@@ -70,27 +86,54 @@ class MensagemRecebida:
 
 
 def extrair_mensagem(payload: dict) -> MensagemRecebida | None:
-    """Parse defensivo. None se: não é messages.upsert, é eco nosso (fromMe), sem
-    remetente, ou tipo não suportado. NUNCA levanta (payload malformado vira None)."""
+    """Parse defensivo do payload da Cloud API. None se: sem `messages` (evento de
+    status), sem remetente, ou tipo não suportado. NUNCA levanta (malformado vira None).
+
+    Estrutura: entry[].changes[].value.messages[] — cada mensagem tem `from`, `type` e
+    o objeto do tipo (`text.body`, `audio.id`, ...).
+    """
     try:
-        if payload.get("event") not in ("messages.upsert", "MESSAGES_UPSERT"):
-            return None
-        data = payload.get("data") or {}
-        key = data.get("key") or {}
-        if key.get("fromMe") is True:  # ANTI-ECO: nossa própria mensagem -> ignora (evita loop)
-            return None
-        telefone = (key.get("remoteJid") or "").split("@", 1)[0]
-        if not telefone:
-            return None
-        msg = data.get("message") or {}
-        if msg.get("audioMessage"):
-            return MensagemRecebida(telefone=telefone, texto=None, audio_raw=data)
-        texto = msg.get("conversation") or (msg.get("extendedTextMessage") or {}).get("text")
-        if texto:
-            return MensagemRecebida(telefone=telefone, texto=texto, audio_raw=None)
-        return None  # imagem/figurinha/etc. -> não suportado, ignora
+        for entry in payload.get("entry") or []:
+            for change in entry.get("changes") or []:
+                value = change.get("value") or {}
+                mensagens = value.get("messages") or []
+                if not mensagens:
+                    continue  # evento de status (entregue/lido) -> ignora
+                msg = mensagens[0]
+                telefone = msg.get("from") or ""
+                if not telefone:
+                    continue
+                tipo = msg.get("type")
+                if tipo == "text":
+                    texto = (msg.get("text") or {}).get("body")
+                    if texto:
+                        return MensagemRecebida(telefone=telefone, texto=texto, audio_raw=None)
+                elif tipo == "audio":
+                    # type:audio preparado p/ STT (Fase 6). audio_raw = a própria mensagem
+                    # (tem `audio.id`), que buscar_audio usa nos dois GETs da mídia.
+                    return MensagemRecebida(telefone=telefone, texto=None, audio_raw=msg)
+                # imagem/figurinha/documento/etc. -> não suportado, ignora
+        return None
     except Exception:  # noqa: BLE001 - payload malformado nunca derruba (§15)
         return None
+
+
+def _assinatura_valida(corpo: bytes, header: str | None, app_secret: str) -> bool:
+    """Valida o `X-Hub-Signature-256` (HMAC-SHA256 do corpo cru com o APP_SECRET).
+
+    APP_SECRET vazio (placeholder) -> PULA a validação com um WARNING explícito (uma vez
+    por processo), para não travar dev/demo. Com secret configurado, assinatura ausente
+    ou divergente -> False (o webhook responde 403)."""
+    global _aviso_assinatura_emitido
+    if not app_secret:
+        if not _aviso_assinatura_emitido:
+            logger.warning("assinatura do webhook NÃO validada — APP_SECRET ausente")
+            _aviso_assinatura_emitido = True
+        return True
+    if not header or not header.startswith("sha256="):
+        return False
+    esperado = "sha256=" + hmac.new(app_secret.encode(), corpo, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(esperado, header)
 
 
 class Dispatcher:
@@ -188,22 +231,44 @@ class Dispatcher:
             await fechar()
 
 
-def criar_router() -> APIRouter:
-    """Router do webhook. Lê o Dispatcher de `app.state.dispatcher` (montado no lifespan)."""
+def criar_router(settings: Settings | None = None) -> APIRouter:
+    """Router do webhook. Lê o Dispatcher de `app.state.dispatcher` (montado no lifespan).
+
+    `settings` (default `get_settings()`) fornece o `verify_token` (GET) e o `app_secret`
+    (assinatura do POST). Injetável para testes."""
+    s = settings or get_settings()
     router = APIRouter()
 
+    @router.get("/webhook/whatsapp")
+    async def verificar(request: Request) -> PlainTextResponse:
+        """Verificação inicial da Cloud API: token confere -> devolve o challenge."""
+        params = request.query_params
+        if (
+            params.get("hub.mode") == "subscribe"
+            and s.whatsapp_verify_token
+            and params.get("hub.verify_token") == s.whatsapp_verify_token
+        ):
+            return PlainTextResponse(params.get("hub.challenge") or "")
+        return PlainTextResponse("forbidden", status_code=403)
+
     @router.post("/webhook/whatsapp")
-    async def webhook(request: Request, background: BackgroundTasks) -> dict[str, str]:
+    async def webhook(request: Request, background: BackgroundTasks) -> PlainTextResponse:
+        corpo = await request.body()
+        # Assinatura primeiro (sobre o corpo CRU). Inválida c/ secret configurado -> 403.
+        if not _assinatura_valida(
+            corpo, request.headers.get("X-Hub-Signature-256"), s.whatsapp_app_secret
+        ):
+            return PlainTextResponse("invalid signature", status_code=403)
         # Corpo não-JSON / não-objeto: 200 e ignora (sem 422 -> sem retry storm).
         try:
-            payload = await request.json()
+            payload = json.loads(corpo)
         except Exception:  # noqa: BLE001
-            return {"status": "ignored"}
+            return PlainTextResponse("ignored")
         if not isinstance(payload, dict):
-            return {"status": "ignored"}
+            return PlainTextResponse("ignored")
         dispatcher = getattr(request.app.state, "dispatcher", None)
         if dispatcher is not None:
             background.add_task(dispatcher.processar, payload)  # ack imediato; processa async
-        return {"status": "received"}
+        return PlainTextResponse("received")
 
     return router
