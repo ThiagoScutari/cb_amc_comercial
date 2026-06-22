@@ -1,4 +1,4 @@
-"""TTS: texto (resposta JÁ pronta do agente) -> áudio MP3 via ElevenLabs (§8.3).
+"""TTS: texto (resposta JÁ pronta do agente) -> áudio OGG/OPUS via ElevenLabs (§8.3).
 
 Porta de SAÍDA (espelho do STT da Fase 6): o `Sintetizador` recebe o MESMO texto
 que `orchestrator.responder()` produziu e o transforma em voz. NÃO há geração de
@@ -10,10 +10,10 @@ A voz é ADITIVA e best-effort. Falha de TTS NUNCA bloqueia a resposta escrita �
 bot nunca fica mudo. Por isso `sintetizar()` degrada para `None` em TODO modo de
 falha (erro/timeout/cota/vazio) sem deixar exceção escapar.
 
-Formato: MP3 no fio (`mp3_44100_128` por default). A Evolution (Fase 8) transcodifica
-para a nota de voz do WhatsApp (Ogg/Opus mono) com o próprio ffmpeg; mandar MP3
-dribla o bug de mime `audio/opus` dela. Por isso NÃO precisamos de ffmpeg no nosso
-Dockerfile.
+Formato: OGG/OPUS no fio (`opus_48000_64` por default, mono). É o que faz o WhatsApp
+renderizar a resposta como NOTA DE VOZ (ptt) na Cloud API — o FORMATO decide, não um campo
+no payload. O valor EFETIVO vem das settings (.env); o default aqui é só fallback e DEVE
+acompanhar o config — um mp3 aqui, enviado como `audio/ogg` no upload, dá 400 na Graph API.
 
 Cliente ElevenLabs (`AsyncElevenLabs`) INJETADO — agnóstico e testável com um fake
 (CI sem rede e sem API key). O client real é montado por uma factory na Fase 8.
@@ -24,7 +24,7 @@ antes da demo (Flash v2.5 rápido vs Multilingual v2 mais natural).
 from __future__ import annotations
 
 _MODELO = "eleven_flash_v2_5"  # baixa latência p/ WhatsApp ao vivo; flip via .env
-_FORMATO = "mp3_44100_128"  # MP3 no fio; Evolution converte p/ ptt opus
+_FORMATO = "opus_48000_64"  # OGG/OPUS mono = nota de voz (ptt); espelha o default do config
 
 
 class Sintetizador:

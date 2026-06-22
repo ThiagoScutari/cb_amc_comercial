@@ -47,3 +47,33 @@ def test_app_port_convertido_para_int(monkeypatch):
     s = _settings()
     assert isinstance(s.app_port, int)
     assert s.app_port == 8005
+
+
+# --- regressão: formato de áudio OPUS p/ nota de voz (ptt) — hotfix do 400 no upload ---
+def test_output_format_default_e_opus_para_ptt():
+    # O default tem que ser OPUS (nota de voz). MP3 enviado como audio/ogg = 400 na Graph API.
+    s = _settings()
+    assert s.elevenlabs_output_format == "opus_48000_64"
+    assert s.elevenlabs_output_format.startswith("opus_")
+
+
+def test_env_var_sobrescreve_o_default_do_output_format(monkeypatch):
+    # MECANISMO do bug: o valor do .env/ambiente VENCE o default do config. Por isso um .env
+    # legado com mp3 derruba o ptt mesmo com o default opus -> cuidar do .env de produção.
+    monkeypatch.setenv("ELEVENLABS_OUTPUT_FORMAT", "mp3_44100_128")
+    assert _settings().elevenlabs_output_format == "mp3_44100_128"
+
+
+def test_env_example_ship_opus_nao_mp3():
+    # CAUSA-RAIZ: o template .env.example não pode pinar MP3 — o .env de produção é copiado
+    # dele, e um mp3 ali sobrescreve o default opus e ressuscita o 400 no ptt.
+    from pathlib import Path
+
+    env_example = Path(__file__).resolve().parent.parent / ".env.example"
+    linha = next(
+        ln
+        for ln in env_example.read_text(encoding="utf-8").splitlines()
+        if ln.strip().startswith("ELEVENLABS_OUTPUT_FORMAT=")
+    )
+    valor = linha.split("=", 1)[1].split("#")[0].strip()
+    assert valor.startswith("opus_"), f".env.example pina {valor!r}; deve ser OPUS p/ ptt"

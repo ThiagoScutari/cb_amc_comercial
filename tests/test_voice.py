@@ -144,7 +144,24 @@ async def test_passa_voice_id_modelo_e_formato_corretos():
     assert kw["text"] == "oi"
 
 
-def test_defaults_flash_v25_e_mp3():
+def test_defaults_flash_v25_e_opus():
+    # default OPUS (nota de voz/ptt), NUNCA mp3 — senão diverge do upload audio/ogg (400).
     s = Sintetizador(object(), voice_id="v")  # configurável via .env; defaults p/ demo
     assert s.modelo == "eleven_flash_v2_5"
-    assert s.output_format == "mp3_44100_128"
+    assert s.output_format == "opus_48000_64"
+
+
+async def test_sintetizador_usa_o_output_format_do_config_no_elevenlabs():
+    # regressão (hotfix ptt 400): o formato que chega ao ElevenLabs é o do CONFIG, espelhando
+    # a fiação da factory — um default hardcoded de tts.py NÃO pode vencer silenciosamente.
+    from app.config import Settings
+
+    s = Settings(_env_file=None)  # default opus_48000_64
+    fake = FakeElevenLabs()
+    await Sintetizador(
+        fake,
+        voice_id=s.elevenlabs_voice_id,
+        modelo=s.elevenlabs_model,
+        output_format=s.elevenlabs_output_format,  # exatamente como criar_dispatcher (factory.py)
+    ).sintetizar("oi")
+    assert fake.capturas[0]["output_format"] == s.elevenlabs_output_format == "opus_48000_64"
