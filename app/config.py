@@ -28,9 +28,20 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = ""  # voz PT-BR escolhida
     # qualidade×latência configurável: eleven_flash_v2_5 (rápido) vs eleven_multilingual_v2
     elevenlabs_model: str = "eleven_flash_v2_5"
-    elevenlabs_output_format: str = "mp3_44100_128"  # MP3 no fio; Evolution converte p/ ptt opus
+    # MP3 enviado como type:audio (audio/mpeg) na Cloud API — toca inline, NÃO é nota de
+    # voz (ptt). A Cloud API não transcodifica (a Evolution transcodificava). Ver client.py:
+    # ptt real exigiria OGG/OPUS aqui (polimento futuro).
+    elevenlabs_output_format: str = "mp3_44100_128"
 
-    # --- WhatsApp (Evolution) ---
+    # --- WhatsApp (Cloud API / Meta) ---
+    whatsapp_waba_id: str = ""
+    whatsapp_phone_number_id: str = ""
+    whatsapp_access_token: str = ""  # TODO: aguardando token permanente da Meta (System User)
+    whatsapp_verify_token: str = ""  # string que VOCÊ define; usada na verificação do webhook
+    whatsapp_app_secret: str = ""  # app secret p/ validar a assinatura do webhook (HMAC-SHA256)
+    whatsapp_api_version: str = "v23.0"
+
+    # --- WhatsApp (Evolution) — DEPRECADO: migrado p/ Cloud API; mantido p/ rollback ---
     evolution_api_url: str = ""
     evolution_api_key: str = ""
     evolution_instance: str = "cb-amc-comercial"
