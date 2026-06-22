@@ -8,10 +8,7 @@
 #   dev:  docker compose up --build
 #   VPS:  docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
 #
-# O que ele faz: coloca app e db na rede externa onde a Evolution já roda, para que
-#   - o nosso app alcance a Evolution por  http://chatbot-imagem-evolution:8080
-#   - a Evolution alcance o nosso webhook por  http://cb_amc_comercial_app:8000
-# `default` continua na lista para o app seguir falando com o db (rede do projeto).
+
 
 services:
   cb_amc_comercial_db:
@@ -19,6 +16,13 @@ services:
 
   cb_amc_comercial_app:
     networks: [default, rede_traefik]
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cb-amc.rule=Host(`bot.thiagoscutari.com.br`)"
+      - "traefik.http.routers.cb-amc.entrypoints=websecure"
+      - "traefik.http.routers.cb-amc.tls.certresolver=le"
+      - "traefik.http.services.cb-amc.loadbalancer.server.port=8000"
+      - "traefik.docker.network=n8n-traefik_app_network"
 
 networks:
   rede_traefik:
