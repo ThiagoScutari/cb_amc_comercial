@@ -30,6 +30,8 @@ RESILIÊNCIA (§15):
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import hmac
 import json
@@ -55,6 +57,12 @@ _aviso_assinatura_emitido = False
 _MSG_AUDIO_RUIM = (
     "Não consegui entender o áudio. Pode repetir, por favor? Se preferir, é só mandar por escrito."
 )
+
+# ACK intermediário por TEMPO (§15, aditivo): se a resposta do agente demorar mais que o
+# limiar, manda um aviso de espera ANTES da resposta real. Resposta rápida (ex.: "oi") não
+# dispara ack. Falha no envio do ack é engolida — jamais bloqueia a resposta (como a voz).
+_ACK_APOS_SEGUNDOS = 3.0  # limiar; sobreponível por instância (Dispatcher.ack_apos_segundos)
+_MSG_ACK = "Só um instante, já estou verificando isso pra você 👍"
 
 # Frases-gatilho (curadas, revisáveis) do resumo visual. Casam a intenção de "visão
 # ampla" (plural/overview), não a consulta de UM pedido específico ("meu pedido 4471").
@@ -159,6 +167,7 @@ class Dispatcher:
         self.sintetizador = sintetizador
         self.sessionmaker = sessionmaker
         self.repo_factory = repo_factory
+        self.ack_apos_segundos = _ACK_APOS_SEGUNDOS  # limiar do ack; testes sobrepõem
 
     async def processar(self, payload: dict) -> None:
         """Entrada da task de background. try/except amplo: pós-200 o erro não volta
@@ -189,13 +198,20 @@ class Dispatcher:
                     return
             else:
                 texto = msg.texto
-            resposta = await self.orquestrador.responder(
-                ferramentas,
-                sessao.cliente_id,
-                texto,
-                nome=sessao.nome,
-                origem_audio=origem_audio,
-            )
+            # ACK por tempo: corrida entre o ack (dispara após o limiar) e o responder().
+            # Resposta < limiar -> cancela o ack (cliente não recebe). >= limiar -> ack já saiu.
+            # try/finally garante o cancelamento mesmo se responder() levantar.
+            ack_task = asyncio.create_task(self._ack_apos_intervalo(msg.telefone))
+            try:
+                resposta = await self.orquestrador.responder(
+                    ferramentas,
+                    sessao.cliente_id,
+                    texto,
+                    nome=sessao.nome,
+                    origem_audio=origem_audio,
+                )
+            finally:
+                await self._cancelar_ack(ack_task)
             await self.client.enviar_texto(msg.telefone, resposta)  # TEXTO SEMPRE (a garantia)
             if origem_audio:  # espelha o canal (§8.3): áudio entra -> áudio sai (best-effort)
                 # Texto formatado -> falável (números/datas por extenso) ANTES do TTS.
@@ -208,6 +224,25 @@ class Dispatcher:
             # cliente já recebeu a resposta em texto (listando os pedidos). Nunca quebra.
             if _quer_resumo_visual(texto):
                 await self._enviar_resumo_html(msg.telefone, repo, sessao.cliente_id, sessao.nome)
+
+    async def _ack_apos_intervalo(self, telefone: str) -> None:
+        """Espera o limiar e SÓ ENTÃO envia o ack de espera. Cancelado se a resposta vier
+        antes (o sleep levanta CancelledError, que propaga e encerra a task sem enviar nada).
+        ADITIVO: falha no envio do ack é engolida — nunca bloqueia a resposta real (§15)."""
+        await asyncio.sleep(self.ack_apos_segundos)  # fora do try: cancelar aqui = não enviar
+        try:
+            await self.client.enviar_texto(telefone, _MSG_ACK)
+        except Exception as exc:  # noqa: BLE001 - ack é aditivo; falha não bloqueia a resposta (§15)
+            logger.warning("ack de espera falhou (aditivo, ignorado): %s", str(exc)[:120])
+
+    @staticmethod
+    async def _cancelar_ack(task: asyncio.Task) -> None:
+        """Cancela a task de ack e absorve o CancelledError. Resposta < limiar: o ack é
+        cancelado em pleno sleep (nunca enviado). Resposta >= limiar: a task já terminou
+        (ack enviado), o cancel é no-op e o await retorna na hora. Ack: no máximo uma vez."""
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     async def _enviar_resumo_html(self, telefone, repo, cliente_id: int, nome: str | None) -> None:
         """Gera e envia o resumo visual (HTML/documento). ADITIVO e best-effort: todo o

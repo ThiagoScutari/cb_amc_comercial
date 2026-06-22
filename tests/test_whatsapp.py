@@ -12,6 +12,7 @@ provando montagem de URL/payload/headers, o fluxo de mídia em dois passos e a d
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import hashlib
 import hmac
@@ -21,7 +22,7 @@ from pathlib import Path
 import httpx
 from app.config import Settings
 from app.whatsapp.client import WhatsAppCloudClient
-from app.whatsapp.router import Dispatcher, criar_router, extrair_mensagem
+from app.whatsapp.router import _MSG_ACK, Dispatcher, criar_router, extrair_mensagem
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -373,6 +374,71 @@ async def test_task_background_nunca_crasha_silenciosamente():
     disp, client, orq, stt, tts = _make()
     disp.orquestrador = _OrqQueExplode()
     await disp.processar(_texto_payload("oi"))  # não deve levantar
+
+
+# ---------- ack intermediário por tempo (>limiar) ----------
+async def test_ack_resposta_rapida_nao_envia_ack():
+    # responder() retorna na hora (< limiar) -> a task de ack é cancelada antes de disparar.
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("oi"))
+    assert client.textos == [(_TEL, "resposta do agente")]  # só a resposta real, sem ack
+
+
+async def test_ack_resposta_lenta_envia_ack_uma_vez_antes_da_resposta():
+    # limiar zero -> o ack dispara assim que o responder cede o loop; chega ANTES da resposta.
+    disp, client, orq, stt, tts = _make()
+    disp.ack_apos_segundos = 0.0
+    evento = asyncio.Event()
+
+    class _OrqLento:
+        async def responder(self, *a, **k):
+            await evento.wait()  # trava até o teste liberar (depois de ver o ack)
+            return "resposta real"
+
+    disp.orquestrador = _OrqLento()
+    task = asyncio.create_task(disp.processar(_texto_payload("demora pra verificar isso")))
+    for _ in range(10):  # cede o loop até o ack aparecer (sem sleep real)
+        await asyncio.sleep(0)
+        if client.textos:
+            break
+    assert client.textos == [(_TEL, _MSG_ACK)]  # ack chegou primeiro, exatamente uma vez
+    evento.set()  # libera a resposta real
+    await task
+    assert client.textos == [(_TEL, _MSG_ACK), (_TEL, "resposta real")]  # ack, depois a resposta
+
+
+async def test_ack_que_falha_no_envio_nao_impede_a_resposta_real():
+    # ack é aditivo: se enviar_texto do ack levanta, a resposta real ainda é entregue.
+    class _ClienteAckFalha(FakeWhatsAppClient):
+        async def enviar_texto(self, telefone, texto):
+            if texto == _MSG_ACK:
+                raise RuntimeError("ack caiu")
+            return await super().enviar_texto(telefone, texto)
+
+    client = _ClienteAckFalha()
+    evento = asyncio.Event()
+
+    class _OrqLento:
+        async def responder(self, *a, **k):
+            await evento.wait()
+            return "resposta real"
+
+    disp = Dispatcher(
+        client=client,
+        orquestrador=_OrqLento(),
+        transcritor=FakeTranscritor(),
+        sintetizador=FakeSintetizador(),
+        sessionmaker=_sessionmaker_fake,
+        repo_factory=lambda session: FakeRepo(FakeCliente()),
+    )
+    disp.ack_apos_segundos = 0.0
+    task = asyncio.create_task(disp.processar(_texto_payload("demora pra verificar isso")))
+    for _ in range(10):
+        await asyncio.sleep(0)  # deixa o ack tentar (e falhar) antes de liberar a resposta
+    evento.set()
+    await task
+    # ack falhou e foi engolido; a resposta real foi entregue mesmo assim
+    assert client.textos == [(_TEL, "resposta real")]
 
 
 # ---------- webhook HTTP: app de teste com settings injetadas ----------
