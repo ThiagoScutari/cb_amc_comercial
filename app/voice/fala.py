@@ -108,16 +108,35 @@ def _converter_datas(texto: str) -> str:
     return _RE_DATA.sub(repl, texto)
 
 
+def _arredondar_reais(reais: int) -> int:
+    """Valor em reais (centavos já fora) -> forma falável ARREDONDADA. Milhares -> centena
+    ('cinco mil e oitocentos'); centenas -> dezena; < 100 -> exato (já é curto).
+
+    Decisão (porta única): o áudio é leve e aproximado; o valor EXATO acompanha no TEXTO que
+    o cliente recebe junto. Vale SÓ para moeda — nunca toca pedido, quantidade, data ou código.
+    """
+    if reais >= 1000:
+        return round(reais / 100) * 100  # casa dos milhares: à centena
+    if reais >= 100:
+        return round(reais / 10) * 10  # centenas: à dezena (ainda preciso)
+    return reais  # < 100: curto o bastante, mantém exato
+
+
 def _converter_valores(texto: str) -> str:
+    """Valor monetário (R$) -> fala APROXIMADA: centavos somem, o valor é arredondado e
+    'cerca de' sinaliza a aproximação. SÓ mexe em moeda (R$ + ,dd do _RE_MOEDA) — datas,
+    pedidos, quantidades e códigos não passam por aqui. Sub-1-real (só centavos) mantém a
+    fala dos centavos (arredondar zeraria o valor)."""
+
     def repl(m: re.Match[str]) -> str:
         reais = int(m.group(1).replace(".", ""))
         centavos = int(m.group(2))
-        partes: list[str] = []
-        if reais:
-            partes.append(f"{_cardinal(reais)} {'real' if reais == 1 else 'reais'}")
-        if centavos:
-            partes.append(f"{_cardinal(centavos)} {'centavo' if centavos == 1 else 'centavos'}")
-        return " e ".join(partes) if partes else "zero reais"
+        if reais == 0:  # ex.: R$ 0,80 -> arredondar daria "zero reais"; fala os centavos
+            return f"{_cardinal(centavos)} {'centavo' if centavos == 1 else 'centavos'}"
+        falado = _arredondar_reais(reais)
+        aproximado = falado != reais or centavos != 0  # rotula só quando NÃO é exato
+        prefixo = "cerca de " if aproximado else ""
+        return f"{prefixo}{_cardinal(falado)} {'real' if falado == 1 else 'reais'}"
 
     return _RE_MOEDA.sub(repl, texto)
 
