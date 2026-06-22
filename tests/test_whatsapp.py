@@ -1,38 +1,41 @@
-"""Testes do webhook + dispatcher (Fase 8) — SEM Evolution viva, SEM rede, SEM keys.
+"""Testes do webhook + dispatcher (Cloud API / Meta) — SEM Meta viva, SEM rede, SEM keys.
 
-Tudo via fakes injetados (FakeEvolutionClient + fakes de orquestrador/transcritor/
-sintetizador + FakeRepo). Cobrem: parsing/roteamento, auth como PORTA ÚNICA (áudio só
-após autenticar), ANTI-ECO (fromMe), contrato áudio-None⇒texto-entregue, robustez da
-task de background e o webhook respondendo SEMPRE 200.
+Tudo via fakes injetados (FakeWhatsAppClient + fakes de orquestrador/transcritor/
+sintetizador + FakeRepo). Cobrem: parsing/roteamento da Cloud API, auth como PORTA ÚNICA
+(áudio só após autenticar), contrato áudio-None⇒texto-entregue, robustez da task de
+background, verificação GET do webhook e validação da assinatura (X-Hub-Signature-256).
 
-O que depende de Evolution viva (conexão/QR/envio real/fetch real) NÃO é testado aqui
-— é validação de host (ver relatório da fase).
+O que depende da Cloud API viva (envio real/fetch real de mídia) NÃO é testado aqui — é
+validação de host. O `WhatsAppCloudClient` é exercido via `httpx.MockTransport` (sem rede),
+provando montagem de URL/payload/headers, o fluxo de mídia em dois passos e a degradação.
 """
 
 from __future__ import annotations
 
-import base64
 import contextlib
+import hashlib
+import hmac
 import json
+from pathlib import Path
 
 import httpx
-import pytest
-from app.main import app
-from app.whatsapp.client import EvolutionClient
-from app.whatsapp.router import Dispatcher, extrair_mensagem
+from app.config import Settings
+from app.whatsapp.client import WhatsAppCloudClient
+from app.whatsapp.router import Dispatcher, criar_router, extrair_mensagem
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-_JID = "5531988880002@s.whatsapp.net"
-_TEL = "5531988880002"
+_TEL = "5531988880002"  # E.164 sem `+` (campo `from` da Cloud API)
+_FIXTURE = Path(__file__).parent / "fixtures" / "whatsapp_cloud_webhook_sample.json"
 
 
 # ---------- fakes ----------
-class FakeEvolutionClient:
+class FakeWhatsAppClient:
     def __init__(self, audio_in: bytes | None = b"ogg-bytes"):
         self.textos: list[tuple[str, str]] = []
         self.audios: list[tuple[str, bytes]] = []
         self.documentos: list[tuple[str, bytes, str]] = []
-        self.falha_documento = False  # True -> enviar_documento levanta (simula Evolution fora)
+        self.falha_documento = False  # True -> enviar_documento levanta (simula Meta fora)
         self.buscou = 0
         self._audio_in = audio_in
 
@@ -48,7 +51,7 @@ class FakeEvolutionClient:
         self, telefone, conteudo, *, filename, mimetype="text/html", caption=None
     ):
         if self.falha_documento:
-            raise RuntimeError("evolution sendMedia caiu")
+            raise RuntimeError("cloud api media caiu")
         self.documentos.append((telefone, conteudo, filename))
         return True
 
@@ -125,7 +128,7 @@ _SEM_CLIENTE = object()  # sentinela: distingue "não passou" de "passou None" (
 
 def _make(cliente=_SEM_CLIENTE, audio_in=b"ogg", texto_stt="cadê meu pedido", audio_out=b"mp3"):
     cliente = FakeCliente() if cliente is _SEM_CLIENTE else cliente
-    client = FakeEvolutionClient(audio_in=audio_in)
+    client = FakeWhatsAppClient(audio_in=audio_in)
     orq = FakeOrquestrador()
     stt = FakeTranscritor(texto_stt)
     tts = FakeSintetizador(audio_out)
@@ -140,24 +143,45 @@ def _make(cliente=_SEM_CLIENTE, audio_in=b"ogg", texto_stt="cadê meu pedido", a
     return disp, client, orq, stt, tts
 
 
-def _texto_payload(texto="oi", jid=_JID, from_me=False):
+# ---------- builders de payload (formato Cloud API) ----------
+def _envelope(message: dict | None, *, statuses: dict | None = None) -> dict:
+    """Monta o envelope entry[].changes[].value. `message` None + statuses -> evento de status."""
+    value: dict = {
+        "messaging_product": "whatsapp",
+        "metadata": {"display_phone_number": "15559576970", "phone_number_id": "PNID"},
+    }
+    if message is not None:
+        value["contacts"] = [{"profile": {"name": "Loja Teste"}, "wa_id": message["from"]}]
+        value["messages"] = [message]
+    if statuses is not None:
+        value["statuses"] = [statuses]
     return {
-        "event": "messages.upsert",
-        "data": {
-            "key": {"remoteJid": jid, "fromMe": from_me},
-            "message": {"conversation": texto},
-        },
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "WABA", "changes": [{"value": value, "field": "messages"}]}],
     }
 
 
-def _audio_payload(jid=_JID):
-    return {
-        "event": "messages.upsert",
-        "data": {
-            "key": {"remoteJid": jid, "fromMe": False},
-            "message": {"audioMessage": {"url": "enc://..."}},
-        },
-    }
+def _texto_payload(texto="oi", wa_id=_TEL):
+    return _envelope(
+        {"from": wa_id, "id": "wamid.X", "timestamp": "1", "type": "text", "text": {"body": texto}}
+    )
+
+
+def _audio_payload(wa_id=_TEL, media_id="MEDIA123"):
+    return _envelope(
+        {
+            "from": wa_id,
+            "id": "wamid.A",
+            "timestamp": "1",
+            "type": "audio",
+            "audio": {"id": media_id, "mime_type": "audio/ogg"},
+        }
+    )
+
+
+def _status_payload(wa_id=_TEL):
+    # Evento de status (entregue/lido) — vem SEM `messages`, em `statuses`.
+    return _envelope(None, statuses={"id": "wamid.X", "status": "delivered", "recipient_id": wa_id})
 
 
 # ---------- parsing ----------
@@ -167,29 +191,37 @@ def test_extrai_mensagem_de_texto():
     assert msg.texto == "meu pedido 4471 saiu?" and not msg.is_audio
 
 
-def test_extrai_mensagem_de_audio():
+def test_extrai_mensagem_de_audio_guarda_a_mensagem_com_media_id():
     msg = extrair_mensagem(_audio_payload())
     assert msg is not None and msg.is_audio and msg.texto is None
+    # audio_raw é a própria mensagem (tem audio.id) — é o que buscar_audio consome.
+    assert msg.audio_raw["audio"]["id"] == "MEDIA123"
 
 
-def test_anti_eco_from_me_retorna_none():
-    # mensagem que NÓS mandamos -> ignorada (senão o bot conversaria consigo mesmo)
-    assert extrair_mensagem(_texto_payload("eco do bot", from_me=True)) is None
+def test_extrai_mensagem_do_fixture_real():
+    payload = json.loads(_FIXTURE.read_text(encoding="utf-8"))
+    msg = extrair_mensagem(payload)
+    assert msg is not None and msg.telefone == _TEL
+    assert msg.texto == "meu pedido 4471 saiu?"
+
+
+def test_status_sem_messages_retorna_none():
+    # Evento de entregue/lido não tem `messages` -> ignorado (não roteia pro agente).
+    assert extrair_mensagem(_status_payload()) is None
 
 
 def test_payload_malformado_retorna_none():
     assert extrair_mensagem({}) is None
-    assert extrair_mensagem({"event": "messages.upsert"}) is None
-    assert extrair_mensagem({"event": "messages.upsert", "data": {"key": {}}}) is None
+    assert extrair_mensagem({"entry": []}) is None
+    assert extrair_mensagem({"entry": [{"changes": [{"value": {}}]}]}) is None
+    assert extrair_mensagem({"entry": [{"changes": [{"value": {"messages": [{}]}}]}]}) is None
 
 
-def test_tipo_nao_suportado_e_evento_irrelevante_retornam_none():
-    img = {
-        "event": "messages.upsert",
-        "data": {"key": {"remoteJid": _JID, "fromMe": False}, "message": {"imageMessage": {}}},
-    }
+def test_tipo_nao_suportado_retorna_none():
+    img = _envelope(
+        {"from": _TEL, "id": "wamid.I", "timestamp": "1", "type": "image", "image": {"id": "x"}}
+    )
     assert extrair_mensagem(img) is None
-    assert extrair_mensagem({"event": "connection.update", "data": {}}) is None
 
 
 # ---------- roteamento ----------
@@ -221,6 +253,13 @@ async def test_roteamento_cliente_inativo_escala_e_nao_chama_agente():
     await disp.processar(_texto_payload("oi"))
     assert orq.chamadas == []
     assert len(client.textos) == 1 and "inativo" in client.textos[0][1].lower()
+
+
+async def test_status_event_no_dispatcher_nao_chama_agente_nem_envia():
+    # Evento de status atravessa o dispatcher como no-op (extrair_mensagem -> None).
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_status_payload())
+    assert orq.chamadas == [] and client.textos == [] and client.audios == []
 
 
 # ---------- auth-gate do ÁUDIO ----------
@@ -336,7 +375,7 @@ async def test_task_background_nunca_crasha_silenciosamente():
     await disp.processar(_texto_payload("oi"))  # não deve levantar
 
 
-# ---------- webhook responde SEMPRE 200 ----------
+# ---------- webhook HTTP: app de teste com settings injetadas ----------
 class _StubDispatcher:
     def __init__(self):
         self.recebidos: list[dict] = []
@@ -345,19 +384,105 @@ class _StubDispatcher:
         self.recebidos.append(payload)
 
 
-def test_resiliencia_webhook_200_valido_agenda_processamento():
+def _app_teste(*, verify_token="", app_secret="", dispatcher=None) -> FastAPI:
+    # _env_file=None -> determinístico (ignora qualquer .env do host).
+    s = Settings(_env_file=None, whatsapp_verify_token=verify_token, whatsapp_app_secret=app_secret)
+    a = FastAPI()
+    a.state.dispatcher = dispatcher
+    a.include_router(criar_router(s))
+    return a
+
+
+def _assinar(corpo: bytes, secret: str) -> str:
+    return "sha256=" + hmac.new(secret.encode(), corpo, hashlib.sha256).hexdigest()
+
+
+# ---------- GET de verificação ----------
+def test_verify_get_token_correto_retorna_challenge():
+    cli = TestClient(_app_teste(verify_token="segredo123"))
+    r = cli.get(
+        "/webhook/whatsapp",
+        params={
+            "hub.mode": "subscribe",
+            "hub.verify_token": "segredo123",
+            "hub.challenge": "1234567890",
+        },
+    )
+    assert r.status_code == 200 and r.text == "1234567890"
+
+
+def test_verify_get_token_errado_retorna_403():
+    cli = TestClient(_app_teste(verify_token="segredo123"))
+    r = cli.get(
+        "/webhook/whatsapp",
+        params={"hub.mode": "subscribe", "hub.verify_token": "errado", "hub.challenge": "x"},
+    )
+    assert r.status_code == 403
+
+
+def test_verify_get_token_nao_configurado_retorna_403():
+    # verify_token vazio nunca casa (evita aceitar verificação sem token definido).
+    cli = TestClient(_app_teste(verify_token=""))
+    r = cli.get(
+        "/webhook/whatsapp",
+        params={"hub.mode": "subscribe", "hub.verify_token": "", "hub.challenge": "x"},
+    )
+    assert r.status_code == 403
+
+
+# ---------- POST: assinatura ----------
+def test_post_sem_secret_pula_validacao_e_agenda(caplog):
+    # APP_SECRET ausente -> pula validação com WARNING explícito e segue (dev/demo).
+    import app.whatsapp.router as router_mod
+
+    router_mod._aviso_assinatura_emitido = False  # garante o WARNING neste teste
     stub = _StubDispatcher()
-    app.state.dispatcher = stub
-    cli = TestClient(app)
-    r = cli.post("/webhook/whatsapp", json=_texto_payload("oi"))
+    cli = TestClient(_app_teste(app_secret="", dispatcher=stub))
+    with caplog.at_level("WARNING"):
+        r = cli.post("/webhook/whatsapp", json=_texto_payload("oi"))
     assert r.status_code == 200
-    assert stub.recebidos == [_texto_payload("oi")]  # task de background rodou
+    assert stub.recebidos == [_texto_payload("oi")]
+    assert "APP_SECRET ausente" in caplog.text
 
 
-def test_resiliencia_webhook_200_corpo_malformado_nao_agenda():
+def test_post_assinatura_valida_agenda_processamento():
     stub = _StubDispatcher()
-    app.state.dispatcher = stub
-    cli = TestClient(app)
+    cli = TestClient(_app_teste(app_secret="sk-secret", dispatcher=stub))
+    corpo = json.dumps(_texto_payload("oi")).encode("utf-8")
+    r = cli.post(
+        "/webhook/whatsapp",
+        content=corpo,
+        headers={"X-Hub-Signature-256": _assinar(corpo, "sk-secret")},
+    )
+    assert r.status_code == 200
+    assert stub.recebidos == [_texto_payload("oi")]
+
+
+def test_post_assinatura_invalida_retorna_403_e_nao_agenda():
+    stub = _StubDispatcher()
+    cli = TestClient(_app_teste(app_secret="sk-secret", dispatcher=stub))
+    corpo = json.dumps(_texto_payload("oi")).encode("utf-8")
+    r = cli.post(
+        "/webhook/whatsapp",
+        content=corpo,
+        headers={"X-Hub-Signature-256": "sha256=deadbeef"},
+    )
+    assert r.status_code == 403
+    assert stub.recebidos == []  # forjada -> nunca chega ao dispatcher
+
+
+def test_post_assinatura_ausente_com_secret_configurado_retorna_403():
+    stub = _StubDispatcher()
+    cli = TestClient(_app_teste(app_secret="sk-secret", dispatcher=stub))
+    r = cli.post("/webhook/whatsapp", json=_texto_payload("oi"))  # sem header
+    assert r.status_code == 403
+    assert stub.recebidos == []
+
+
+# ---------- POST: resiliência ----------
+def test_post_corpo_malformado_responde_200_e_nao_agenda():
+    stub = _StubDispatcher()
+    cli = TestClient(_app_teste(app_secret="", dispatcher=stub))
     r = cli.post(
         "/webhook/whatsapp", content=b"{nao eh json", headers={"content-type": "application/json"}
     )
@@ -365,115 +490,138 @@ def test_resiliencia_webhook_200_corpo_malformado_nao_agenda():
     assert stub.recebidos == []
 
 
-def test_resiliencia_webhook_200_sem_dispatcher_montado():
-    app.state.dispatcher = None  # falha de init no lifespan não pode quebrar o webhook
-    cli = TestClient(app)
+def test_post_sem_dispatcher_montado_responde_200():
+    cli = TestClient(_app_teste(app_secret="", dispatcher=None))
     r = cli.post("/webhook/whatsapp", json=_texto_payload("oi"))
     assert r.status_code == 200
 
 
-@pytest.fixture(autouse=True)
-def _reset_dispatcher():
-    yield
-    app.state.dispatcher = None  # não vaza estado entre testes
-
-
-# ---------- EvolutionClient (lógica nossa, via httpx.MockTransport — sem rede) ----------
-# Testa montagem de URL/payload/header, base64 e degradação. NÃO testa Evolution viva.
-def _client(handler) -> EvolutionClient:
+# ---------- WhatsAppCloudClient (lógica nossa, via httpx.MockTransport — sem rede) ----------
+# Testa montagem de URL/payload/headers, o fluxo de mídia em 2 passos e a degradação.
+def _client(handler) -> WhatsAppCloudClient:
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    return EvolutionClient(http, base_url="http://evo:8080", apikey="K", instancia="inst")
+    return WhatsAppCloudClient(
+        http, access_token="TOK", phone_number_id="PNID", api_version="v23.0"
+    )
 
 
-async def test_enviar_texto_monta_url_payload_e_apikey():
+async def test_enviar_texto_monta_url_payload_e_bearer():
     capturado = {}
 
     def handler(request):
         capturado["url"] = str(request.url)
-        capturado["apikey"] = request.headers.get("apikey")
+        capturado["auth"] = request.headers.get("Authorization")
         capturado["json"] = json.loads(request.content)
-        return httpx.Response(200, json={"key": {"id": "x"}})
+        return httpx.Response(200, json={"messages": [{"id": "wamid.x"}]})
 
     cli = _client(handler)
-    assert await cli.enviar_texto("5531988880002", "oi") is True
-    assert capturado["url"] == "http://evo:8080/message/sendText/inst"
-    assert capturado["apikey"] == "K"
-    assert capturado["json"] == {"number": "5531988880002", "text": "oi"}
+    assert await cli.enviar_texto("+5531988880002", "oi") is True
+    assert capturado["url"] == "https://graph.facebook.com/v23.0/PNID/messages"
+    assert capturado["auth"] == "Bearer TOK"
+    assert capturado["json"] == {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": "5531988880002",  # `+` removido
+        "type": "text",
+        "text": {"body": "oi"},
+    }
     await cli.aclose()
 
 
-async def test_enviar_audio_manda_base64():
-    capturado = {}
+async def test_enviar_audio_faz_upload_e_referencia_media_id():
+    chamadas = []
 
     def handler(request):
-        capturado["json"] = json.loads(request.content)
-        return httpx.Response(200, json={})
+        chamadas.append(str(request.url))
+        if request.url.path.endswith("/media"):
+            # multipart de upload: confirma que o messaging_product foi no form.
+            assert b"whatsapp" in request.content
+            return httpx.Response(200, json={"id": "MID-1"})
+        body = json.loads(request.content)
+        assert body["type"] == "audio" and body["audio"] == {"id": "MID-1"}
+        return httpx.Response(200, json={"messages": [{"id": "wamid.x"}]})
 
     cli = _client(handler)
-    assert await cli.enviar_audio("5531988880002", b"\x00\x01mp3") is True
-    assert capturado["json"]["audio"] == base64.b64encode(b"\x00\x01mp3").decode("ascii")
+    assert await cli.enviar_audio(_TEL, b"\x00\x01mp3") is True
+    assert chamadas == [
+        "https://graph.facebook.com/v23.0/PNID/media",
+        "https://graph.facebook.com/v23.0/PNID/messages",
+    ]
     await cli.aclose()
 
 
-async def test_enviar_documento_monta_sendmedia_com_base64_puro():
+async def test_enviar_audio_falha_no_upload_nao_envia_mensagem():
+    chamadas = []
+
+    def handler(request):
+        chamadas.append(str(request.url))
+        return httpx.Response(500, json={})  # upload falha
+
+    cli = _client(handler)
+    assert await cli.enviar_audio(_TEL, b"mp3") is False
+    assert len(chamadas) == 1  # só tentou o upload; não mandou mensagem
+    await cli.aclose()
+
+
+async def test_enviar_documento_upload_e_envia_type_document():
     capturado = {}
 
     def handler(request):
-        capturado["url"] = str(request.url)
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json={"id": "DOC-1"})
         capturado["json"] = json.loads(request.content)
-        return httpx.Response(200, json={"key": {"id": "x"}})
+        return httpx.Response(200, json={"messages": [{"id": "x"}]})
 
     cli = _client(handler)
     ok = await cli.enviar_documento(
-        "5531988880002", b"<html>x</html>", filename="Resumo.html", caption="Seu resumo"
+        _TEL, b"<html>x</html>", filename="Resumo.html", caption="Seu resumo"
     )
     assert ok is True
-    assert capturado["url"] == "http://evo:8080/message/sendMedia/inst"
     j = capturado["json"]
-    assert j["number"] == "5531988880002"
-    assert j["mediatype"] == "document" and j["mimetype"] == "text/html"
-    assert j["fileName"] == "Resumo.html" and j["caption"] == "Seu resumo"
-    b64 = base64.b64encode(b"<html>x</html>").decode("ascii")
-    # Evolution v2.3.7 exige base64 PURO; data-URI ("data:...;base64,...") é rejeitado com 400.
-    assert j["media"] == b64
-    assert not j["media"].startswith("data:")
+    assert j["type"] == "document"
+    assert j["document"] == {"id": "DOC-1", "filename": "Resumo.html", "caption": "Seu resumo"}
     await cli.aclose()
 
 
-async def test_enviar_documento_degrada_para_false_em_erro():
-    def handler(request):
-        return httpx.Response(500, json={})
-
-    cli = _client(handler)
-    assert await cli.enviar_documento("5531988880002", b"x", filename="a.html") is False
-    await cli.aclose()
-
-
-async def test_buscar_audio_decodifica_base64_para_bytes():
+async def test_buscar_audio_dois_gets_devolve_bytes():
     audio = b"ogg-opus-bytes-do-whatsapp"
 
     def handler(request):
-        return httpx.Response(200, json={"base64": base64.b64encode(audio).decode("ascii")})
+        if request.url.path.endswith("/MEDIA123"):
+            return httpx.Response(200, json={"url": "https://lookaside.fbsbx.com/x"})
+        # segundo GET (na url do lookaside) devolve os bytes binários.
+        assert request.headers.get("Authorization") == "Bearer TOK"
+        return httpx.Response(200, content=audio)
 
     cli = _client(handler)
-    assert await cli.buscar_audio({"key": {}}) == audio
+    msg = {"audio": {"id": "MEDIA123"}}
+    assert await cli.buscar_audio(msg) == audio
     await cli.aclose()
 
 
-async def test_erro_http_degrada_sem_levantar():
+async def test_buscar_audio_sem_media_id_devolve_none():
+    def handler(request):  # não deve ser chamado
+        raise AssertionError("não deveria bater na rede")
+
+    cli = _client(handler)
+    assert await cli.buscar_audio({"type": "audio"}) is None
+    await cli.aclose()
+
+
+async def test_401_token_invalido_degrada_para_false():
     def handler(request):
-        return httpx.Response(500, json={"error": "boom"})
+        return httpx.Response(401, json={"error": {"message": "invalid token"}})
 
     cli = _client(handler)
-    assert await cli.enviar_texto("5531988880002", "oi") is False
-    assert await cli.buscar_audio({"key": {}}) is None  # falha -> None, não exceção
+    assert await cli.enviar_texto(_TEL, "oi") is False  # token placeholder -> degrada
     await cli.aclose()
 
 
-async def test_evolution_fora_do_ar_degrada_sem_levantar():
+async def test_erro_http_e_rede_degradam_sem_levantar():
     def handler(request):
         raise httpx.ConnectError("conexão recusada")
 
     cli = _client(handler)
-    assert await cli.enviar_texto("5531988880002", "oi") is False  # Evolution fora -> não derruba
+    assert await cli.enviar_texto(_TEL, "oi") is False  # Meta fora -> não derruba
+    assert await cli.buscar_audio({"audio": {"id": "X"}}) is None
     await cli.aclose()
