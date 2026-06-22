@@ -600,8 +600,10 @@ async def test_enviar_audio_faz_upload_e_referencia_media_id():
     def handler(request):
         chamadas.append(str(request.url))
         if request.url.path.endswith("/media"):
-            # multipart de upload: confirma que o messaging_product foi no form.
+            # multipart de upload: messaging_product no form + OGG/OPUS (ptt = nota de voz).
             assert b"whatsapp" in request.content
+            assert b"audio/ogg" in request.content  # mimetype OPUS -> nota de voz
+            assert b"resposta.ogg" in request.content  # filename .ogg
             return httpx.Response(200, json={"id": "MID-1"})
         body = json.loads(request.content)
         assert body["type"] == "audio" and body["audio"] == {"id": "MID-1"}

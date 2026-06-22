@@ -16,11 +16,13 @@ Mídia (áudio/documento) é em DOIS passos na Cloud API:
   1) upload multipart em `/{phone_number_id}/media` -> `media_id`;
   2) mensagem referenciando o `media_id` (`type:audio`/`type:document`).
 
-Áudio: mando MP3 (`audio/mpeg`) como `type:audio`. A Cloud API NÃO transcodifica
-(diferente da Evolution) — então toca inline como arquivo de áudio, não como nota de
-voz (ptt).
-# TODO(polimento): ptt real (nota de voz) exige OGG/OPUS; avaliar trocar o
-# ELEVENLABS_OUTPUT_FORMAT p/ opus quando validarmos se a nota de voz melhora a demo.
+Áudio: mando OGG/OPUS (`audio/ogg`) como `type:audio` -> o WhatsApp renderiza a resposta
+como NOTA DE VOZ (ptt, bolinha de microfone). O que decide o ptt é o FORMATO do arquivo
+(OGG/OPUS mono), não um campo no payload — não existe `voice:true` na Cloud API. O OPUS vem
+do ElevenLabs (ELEVENLABS_OUTPUT_FORMAT=opus_48000_64, 48kHz mono).
+# Validação final do ptt é VISUAL no WhatsApp (suíte verde não prova a bolinha de microfone).
+# Plano B se algum device tocar como arquivo: transcodar p/ OGG/OPUS mono com ffmpeg
+# (`-c:a libopus -ac 1 -b:a 64k`) — exigiria ffmpeg no Dockerfile (decisão à parte).
 
 O fetch do áudio recebido (`buscar_audio`) também é em dois GETs: `/{media_id}` devolve
 uma `url` temporária (lookaside CDN), e o GET dessa url — também com o Bearer — devolve
@@ -156,8 +158,10 @@ class WhatsAppCloudClient:
         )
 
     async def enviar_audio(self, telefone: str, audio: bytes) -> bool:
-        """Envia o MP3 (audio/mpeg) como `type:audio`. Upload -> media_id -> mensagem."""
-        media_id = await self._upload_media(audio, filename="resposta.mp3", mimetype="audio/mpeg")
+        """Envia o OGG/OPUS (audio/ogg) como `type:audio` -> nota de voz (ptt) no WhatsApp.
+        Upload -> media_id -> mensagem. O ptt é decidido pelo FORMATO (OGG/OPUS), não pelo
+        payload. Degrada p/ False se o upload falhar (o texto já saiu antes, em router.py)."""
+        media_id = await self._upload_media(audio, filename="resposta.ogg", mimetype="audio/ogg")
         if not media_id:
             return False
         return await self._enviar_mensagem(

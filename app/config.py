@@ -28,10 +28,12 @@ class Settings(BaseSettings):
     elevenlabs_voice_id: str = ""  # voz PT-BR escolhida
     # qualidade×latência configurável: eleven_flash_v2_5 (rápido) vs eleven_multilingual_v2
     elevenlabs_model: str = "eleven_flash_v2_5"
-    # MP3 enviado como type:audio (audio/mpeg) na Cloud API — toca inline, NÃO é nota de
-    # voz (ptt). A Cloud API não transcodifica (a Evolution transcodificava). Ver client.py:
-    # ptt real exigiria OGG/OPUS aqui (polimento futuro).
-    elevenlabs_output_format: str = "mp3_44100_128"
+    # OGG/OPUS para nota de voz (ptt) na Cloud API; mono. O WhatsApp só renderiza a resposta
+    # como nota de voz (bolinha de microfone) quando o áudio é OGG/OPUS — é o FORMATO que
+    # decide, não um campo no payload (não existe voice:true na Cloud API). 48kHz/64kbps:
+    # equilíbrio p/ voz; ElevenLabs TTS é mono por natureza. Sobreponível por env
+    # (ELEVENLABS_OUTPUT_FORMAT). Valores OPUS válidos no SDK: opus_48000_{32,64,96,128,192}.
+    elevenlabs_output_format: str = "opus_48000_64"
 
     # --- WhatsApp (Cloud API / Meta) ---
     whatsapp_waba_id: str = ""
