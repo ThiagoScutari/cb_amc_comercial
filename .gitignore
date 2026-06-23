@@ -6,6 +6,10 @@
 # ===== Permissões locais do Claude Code =====
 .claude/settings.local.json
 
+# ===== Documentação interna gerada (apenas local, não versionar) =====
+/docs/VISAO-GERAL-PROJETO.md
+/docs/MAPA-TECNICO.md
+
 # ===== Python =====
 __pycache__/
 *.py[cod]
