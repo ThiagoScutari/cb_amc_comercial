@@ -1,5 +1,10 @@
 # Atendente Comercial AMC — Chatbot B2B no WhatsApp
 
+[![CI](https://github.com/ThiagoScutari/cb_amc_comercial/actions/workflows/ci.yml/badge.svg)](https://github.com/ThiagoScutari/cb_amc_comercial/actions/workflows/ci.yml)
+
+> **Status:** MVP / demonstração. Banco mockado — catálogo **Colcci real**; clientes,
+> pedidos e estoque **sintéticos**. Projeto de consultoria (sem licença pública).
+
 Assistente de **atendimento comercial B2B** da AMC Têxtil que conversa com lojistas e
 compradores pelo **WhatsApp** e responde, em **texto e áudio**, sobre **pedidos** e
 **disponibilidade de estoque** — entendendo a pergunta em linguagem natural, sem menus
@@ -13,10 +18,15 @@ nem formulários.
   respondido na hora, como numa conversa normal.
 - **Entende linguagem natural — por escrito ou por voz.** O cliente pode digitar ou
   **mandar uma mensagem de voz**; o assistente entende as duas formas.
-- **Responde também por voz.** Além do texto, o assistente **responde com áudio**, para
-  uma conversa mais natural.
-- **Consulta pedidos e estoque.** Status e prazo de um pedido, e se um produto está
-  disponível para comprar.
+- **Responde por voz quando o cliente fala por voz.** O texto sai sempre; **se a pergunta
+  veio em áudio, a resposta também volta em áudio** (espelho de canal), para uma conversa
+  mais natural.
+- **Consulta pedidos, estoque e catálogo.** Status e prazo de um pedido, se um produto
+  está disponível para comprar, e busca no catálogo (*"tem camiseta branca M?"*).
+- **Informa a condição de pagamento da conta.** Responde *"qual a minha condição de
+  pagamento?"* com os dados comerciais da própria conta.
+- **Monta um resumo visual dos pedidos.** A pedido (*"meus pedidos"*), além da resposta em
+  texto, envia um resumo em HTML que abre estilizado no navegador do celular.
 - **Não deixa o cliente no vácuo.** Quando a consulta demora um pouco, ele avisa
   *"só um instante, já estou verificando"* antes de trazer a resposta.
 - **Cada cliente vê só os próprios dados.** Uma conta nunca enxerga pedidos ou
@@ -40,7 +50,8 @@ O cliente fala pelo WhatsApp; a mensagem chega ao nosso serviço pela **API ofic
 WhatsApp (Meta)**. Se for áudio, ele é **transcrito** para texto; um modelo de
 linguagem **(Claude)** interpreta o pedido e, quando precisa de um dado real (pedido,
 prazo, estoque), o **código** — não o modelo — consulta a base e devolve o fato. A
-resposta volta em texto e, em paralelo, é convertida em **áudio**.
+resposta volta em texto; **se a mensagem do cliente veio em áudio**, o texto também é
+convertido em **voz** e enviado como nota de áudio.
 
 ![Arquitetura](docs/img/arquitetura.png)
 
@@ -58,6 +69,14 @@ não altera nada no sistema da AMC.
 
 > Fonte da verdade do produto: **`spec.md`**. Primer de cada sessão de
 > desenvolvimento: **`CLAUDE.md`**.
+
+**Nesta seção:** [Portas reservadas](#portas-reservadas-port-registry--não-improvisar) ·
+[Desenvolvimento local](#desenvolvimento-local) ·
+[Evals](#evals-de-comportamento-sob-demanda-fora-do-ci) ·
+[Docker](#subir-com-docker-postgres--app) ·
+[Deploy na VPS](#deploy-na-vps-traefik) ·
+[Conectar o WhatsApp](#conectar-o-whatsapp-cloud-api-da-meta) ·
+[Estrutura](#estrutura)
 
 ### Portas reservadas (PORT-REGISTRY — não improvisar)
 
@@ -81,6 +100,9 @@ bandit -r app/
 pip-audit -r requirements.txt
 pytest                                              # cobertura mínima 70%
 ```
+
+> Os testes de IDOR marcados `@pytest.mark.postgres` sobem um Postgres efêmero
+> (testcontainers) e **exigem Docker** — sem Docker, pulam automaticamente.
 
 ### Evals de comportamento (sob demanda, fora do CI)
 
@@ -142,7 +164,9 @@ mesmo path `/webhook/whatsapp` atende dois momentos:
 2. **Recebimento de mensagens (POST).** A Meta envia os eventos em
    `entry[].changes[].value.messages[]`. Cada POST é autenticado pela assinatura
    `X-Hub-Signature-256` (HMAC-SHA256 do corpo com o `WHATSAPP_APP_SECRET`), validada
-   antes de qualquer parse.
+   antes de qualquer parse. Se o `WHATSAPP_APP_SECRET` estiver **vazio**, a validação é
+   **pulada** (com aviso no log) para não travar dev/demo — **preencha-o antes de ir a
+   produção**.
 
 Para a Meta **entregar** mensagens, a conta WhatsApp Business (**WABA**) precisa estar
 **inscrita no app** (`subscribed_apps`) — sem isso, o webhook nunca recebe nada. O envio
@@ -153,6 +177,7 @@ Variáveis relevantes no `.env` (template em `.env.example`):
 
 | Variável | Para quê |
 |----------|----------|
+| `WHATSAPP_WABA_ID`         | conta WhatsApp Business; usada p/ inscrever a WABA no app (`subscribed_apps`) |
 | `WHATSAPP_PHONE_NUMBER_ID` | número virtual da Meta que envia/recebe |
 | `WHATSAPP_ACCESS_TOKEN`    | token permanente (System User) |
 | `WHATSAPP_VERIFY_TOKEN`    | string que você define; verificação do webhook (GET) |
@@ -191,6 +216,7 @@ Variáveis relevantes no `.env` (template em `.env.example`):
 │   ├── logging_config.py
 │   └── main.py         # FastAPI + /health + webhook
 ├── tests/              # suíte determinística + tests/evals/ (Claude API real)
+├── scripts/            # operacionais (cadastrar_demo, captura do catálogo Colcci)
 ├── docs/img/           # diagramas do README
 ├── Dockerfile · docker-compose.yml · docker-compose.vps.yml · requirements*.txt · pyproject.toml
 ├── EVALS.md            # gate de comportamento
