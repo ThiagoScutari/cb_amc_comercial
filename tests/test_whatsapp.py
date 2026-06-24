@@ -669,7 +669,8 @@ async def test_enviar_audio_faz_upload_e_referencia_media_id():
             assert b"resposta.ogg" in request.content  # filename .ogg
             return httpx.Response(200, json={"id": "MID-1"})
         body = json.loads(request.content)
-        assert body["type"] == "audio" and body["audio"] == {"id": "MID-1"}
+        # voice:true marca como nota de voz (ptt) -> toca inline, não como arquivo p/ baixar
+        assert body["type"] == "audio" and body["audio"] == {"id": "MID-1", "voice": True}
         return httpx.Response(200, json={"messages": [{"id": "wamid.x"}]})
 
     cli = _client(handler)

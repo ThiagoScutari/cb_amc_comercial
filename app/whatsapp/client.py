@@ -159,8 +159,9 @@ class WhatsAppCloudClient:
 
     async def enviar_audio(self, telefone: str, audio: bytes) -> bool:
         """Envia o OGG/OPUS (audio/ogg) como `type:audio` -> nota de voz (ptt) no WhatsApp.
-        Upload -> media_id -> mensagem. O ptt é decidido pelo FORMATO (OGG/OPUS), não pelo
-        payload. Degrada p/ False se o upload falhar (o texto já saiu antes, em router.py)."""
+        Upload -> media_id -> mensagem. O ptt exige DUAS coisas juntas: o FORMATO OGG/OPUS mono
+        E o campo `voice: true` no objeto audio — sem a flag, a Meta entrega como ARQUIVO para
+        baixar. Degrada p/ False se o upload falhar (o texto já saiu antes, em router.py)."""
         media_id = await self._upload_media(audio, filename="resposta.ogg", mimetype="audio/ogg")
         if not media_id:
             return False
@@ -170,7 +171,7 @@ class WhatsAppCloudClient:
                 "recipient_type": "individual",
                 "to": self._normalizar(telefone),
                 "type": "audio",
-                "audio": {"id": media_id},
+                "audio": {"id": media_id, "voice": True},  # voice:true -> nota de voz inline (ptt)
             }
         )
 

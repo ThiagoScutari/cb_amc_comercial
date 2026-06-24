@@ -10,10 +10,11 @@ A voz é ADITIVA e best-effort. Falha de TTS NUNCA bloqueia a resposta escrita �
 bot nunca fica mudo. Por isso `sintetizar()` degrada para `None` em TODO modo de
 falha (erro/timeout/cota/vazio) sem deixar exceção escapar.
 
-Formato: OGG/OPUS no fio (`opus_48000_64` por default, mono). É o que faz o WhatsApp
-renderizar a resposta como NOTA DE VOZ (ptt) na Cloud API — o FORMATO decide, não um campo
-no payload. O valor EFETIVO vem das settings (.env); o default aqui é só fallback e DEVE
-acompanhar o config — um mp3 aqui, enviado como `audio/ogg` no upload, dá 400 na Graph API.
+Formato: OGG/OPUS no fio (`opus_48000_64` por default, mono). É condição NECESSÁRIA para o
+WhatsApp renderizar como NOTA DE VOZ (ptt), mas NÃO suficiente: o envio também precisa marcar
+`voice: true` no objeto audio (ver client.enviar_audio) — só o formato não basta. O valor
+EFETIVO vem das settings (.env); o default aqui é só fallback e DEVE acompanhar o config —
+um mp3 aqui, enviado como `audio/ogg` no upload, dá 400 na Graph API.
 
 Cliente ElevenLabs (`AsyncElevenLabs`) INJETADO — agnóstico e testável com um fake
 (CI sem rede e sem API key). O client real é montado por uma factory na Fase 8.
