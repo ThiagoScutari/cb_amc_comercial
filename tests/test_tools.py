@@ -8,14 +8,19 @@ normalização de telefone e contratos de design.
 import pytest
 from app.agent.tools import (
     PARAMS_TOOLS,
+    TOOL_DEFS,
     ClienteView,
+    DevolucaoView,
     EscalonamentoView,
     EstoqueView,
+    FaturamentoView,
     Ferramentas,
     NaoEncontrado,
+    NotaFiscalView,
     PedidoView,
     ProdutoView,
     SolicitacaoView,
+    TituloView,
 )
 from app.data.models import Cliente, Estoque, Pedido, Solicitacao
 from app.data.repository import MockRepository, normalizar_telefone
@@ -218,3 +223,120 @@ def test_ferramenta_escalar_para_humano_registra(repo):
     v = Ferramentas(repo, cliente_id=1).escalar_para_humano("quero falar com uma pessoa")
     assert isinstance(v, EscalonamentoView)
     assert v.registrado is True
+
+
+# ---------- S14: tools fiscais/financeiras (read-only) ----------
+def test_consultar_nota_fiscal_propria(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_nota_fiscal(60001)
+    assert isinstance(v, NotaFiscalView)
+    assert v.numero_nf == 60001 and v.numero_pedido == 4473
+    assert v.status_entrega == "Emitida"  # str do enum
+
+
+def test_consultar_nota_fiscal_inexistente_mensagem(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_nota_fiscal(99999)
+    assert isinstance(v, NaoEncontrado)
+    assert v.mensagem == "Não encontrei essa nota fiscal."
+
+
+def test_nota_fiscal_view_nao_vaza_id_nem_cliente_id(repo):
+    dump = Ferramentas(repo, cliente_id=1).consultar_nota_fiscal(60001).model_dump()
+    assert "cliente_id" not in dump and "id" not in dump and "pedido_id" not in dump
+    assert {"numero_nf", "chave_acesso"} <= set(dump)  # chave de negócio + NF-e legítimos
+
+
+def test_listar_notas_fiscais_ordenado_e_view(repo):
+    vs = Ferramentas(repo, cliente_id=1).listar_notas_fiscais()
+    assert all(isinstance(v, NotaFiscalView) for v in vs)
+    assert [v.numero_nf for v in vs] == [60001, 60002, 60003, 60004, 60005]
+
+
+def test_consultar_titulo_proprio(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_titulo("70001")
+    assert isinstance(v, TituloView)
+    assert v.numero_titulo == "70001" and v.numero_nf == 60001  # numero de NEGÓCIO da NF
+
+
+def test_consultar_titulo_inexistente_mensagem(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_titulo("99999")
+    assert isinstance(v, NaoEncontrado)
+    assert v.mensagem == "Não encontrei esse título."
+
+
+def test_titulo_view_nao_vaza_id_nem_cliente_id(repo):
+    dump = Ferramentas(repo, cliente_id=1).consultar_titulo("70001").model_dump()
+    assert "cliente_id" not in dump and "id" not in dump and "nota_fiscal_id" not in dump
+    assert "linha_digitavel" in dump  # boleto legítimo
+
+
+def test_listar_titulos_filtro_status(repo):
+    f = Ferramentas(repo, cliente_id=1)
+    assert len(f.listar_titulos()) == 15  # 5 NFs x 3 parcelas
+    pagos = f.listar_titulos("pago")
+    assert pagos and all(v.status == "Pago" for v in pagos)
+    vencidos = f.listar_titulos("vencido")
+    assert vencidos and all(v.status == "Vencido" for v in vencidos)
+
+
+def test_listar_titulos_status_invalido_lista_vazia(repo):
+    assert Ferramentas(repo, cliente_id=1).listar_titulos("xyz") == []
+
+
+def test_consultar_devolucao_propria(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_devolucao("80001")
+    assert isinstance(v, DevolucaoView)
+    assert v.numero_devolucao == "80001" and v.numero_nf == 60001
+
+
+def test_consultar_devolucao_inexistente_mensagem(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_devolucao("00000")
+    assert isinstance(v, NaoEncontrado)
+    assert v.mensagem == "Não encontrei essa devolução."
+
+
+def test_devolucao_view_nao_vaza_id_nem_cliente_id(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_devolucao("80003")
+    dump = v.model_dump()
+    assert "cliente_id" not in dump and "id" not in dump and "nota_fiscal_id" not in dump
+    assert v.valor_credito is not None  # 80003 = credito_gerado
+
+
+def test_listar_devolucoes_so_do_dono(repo):
+    vs = Ferramentas(repo, cliente_id=1).listar_devolucoes()
+    assert {v.numero_devolucao for v in vs} == {"80001", "80002", "80003"}
+    assert all(isinstance(v, DevolucaoView) for v in vs)
+
+
+def test_consultar_faturamento_view_bate_o_seed(repo):
+    v = Ferramentas(repo, cliente_id=1).consultar_faturamento()
+    assert isinstance(v, FaturamentoView)
+    assert v.pedidos_total == 9 and v.pedidos_faturados == 5 and v.pedidos_a_faturar == 4
+    dump = v.model_dump()
+    assert "cliente_id" not in dump
+    assert v.valor_faturado + v.valor_a_faturar > 0
+
+
+def test_tools_fiscais_isoladas_por_cliente(repo):
+    # cliente 2 não enxerga NF/título/devolução do cliente 1 (repository S13 garante).
+    f2 = Ferramentas(repo, cliente_id=2)
+    assert isinstance(f2.consultar_nota_fiscal(60001), NaoEncontrado)
+    assert isinstance(f2.consultar_titulo("70001"), NaoEncontrado)
+    assert isinstance(f2.consultar_devolucao("80001"), NaoEncontrado)
+    assert 60001 not in {v.numero_nf for v in f2.listar_notas_fiscais()}
+
+
+def test_tool_defs_tem_15_tools_e_additional_properties_false():
+    assert len(TOOL_DEFS) == 15  # 8 antigas + 7 novas (S14)
+    assert all(d["input_schema"]["additionalProperties"] is False for d in TOOL_DEFS)
+    # nenhuma tool expõe cliente_id no schema (princípio 2)
+    assert all("cliente_id" not in d["input_schema"]["properties"] for d in TOOL_DEFS)
+    nomes = {d["name"] for d in TOOL_DEFS}
+    assert {
+        "consultar_nota_fiscal",
+        "listar_notas_fiscais",
+        "consultar_titulo",
+        "listar_titulos",
+        "consultar_devolucao",
+        "listar_devolucoes",
+        "consultar_faturamento",
+    } <= nomes

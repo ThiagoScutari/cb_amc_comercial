@@ -19,7 +19,16 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 
-from app.data.models import Cliente, Pedido, Solicitacao, StatusPedido
+from app.data.models import (
+    Cliente,
+    Devolucao,
+    NotaFiscal,
+    Pedido,
+    Solicitacao,
+    StatusPedido,
+    StatusTitulo,
+    Titulo,
+)
 from app.data.repository import DadosRepository
 from app.ops.escalation import registrar_escalonamento
 
@@ -125,6 +134,97 @@ class ClienteView(BaseModel):
         return cls(condicao_pagamento=c.condicao_pagamento, cidade_uf=c.cidade_uf)
 
 
+class NotaFiscalView(BaseModel):
+    # Dados que o cliente veria no Portal. Chave de negócio (numero_nf) + chave_acesso (NF-e)
+    # são legítimos; NÃO expõe id interno nem cliente_id (já isolado no repository, S13).
+    numero_nf: int
+    numero_pedido: int
+    data_emissao: dt.date
+    valor_total: Decimal
+    chave_acesso: str
+    status_entrega: str
+    transportadora: str | None
+    codigo_rastreio: str | None
+    data_prevista_entrega: dt.date | None
+    data_entrega: dt.date | None
+
+    @classmethod
+    def from_model(cls, nf: NotaFiscal) -> NotaFiscalView:
+        return cls(
+            numero_nf=nf.numero_nf,
+            numero_pedido=nf.pedido_id,
+            data_emissao=nf.data_emissao,
+            valor_total=nf.valor_total,
+            chave_acesso=nf.chave_acesso,
+            status_entrega=nf.status_entrega.value,
+            transportadora=nf.transportadora,
+            codigo_rastreio=nf.codigo_rastreio,
+            data_prevista_entrega=nf.data_prevista_entrega,
+            data_entrega=nf.data_entrega,
+        )
+
+
+class TituloView(BaseModel):
+    # numero_nf é o número de NEGÓCIO da NF amarrada (não a PK interna). linha_digitavel
+    # (boleto) é legítima — o cliente precisa dela p/ pagar.
+    numero_titulo: str
+    numero_nf: int
+    parcela: str
+    valor: Decimal
+    data_vencimento: dt.date
+    status: str
+    data_pagamento: dt.date | None
+    linha_digitavel: str
+
+    @classmethod
+    def from_model(cls, t: Titulo) -> TituloView:
+        return cls(
+            numero_titulo=t.numero_titulo,
+            numero_nf=t.nota_fiscal.numero_nf,
+            parcela=t.parcela,
+            valor=t.valor,
+            data_vencimento=t.data_vencimento,
+            status=t.status.value,
+            data_pagamento=t.data_pagamento,
+            linha_digitavel=t.linha_digitavel,
+        )
+
+
+class DevolucaoView(BaseModel):
+    numero_devolucao: str
+    numero_nf: int
+    motivo: str
+    status: str
+    codigo_postagem: str | None
+    prazo_postagem: dt.date | None
+    valor_credito: Decimal | None
+    data_credito: dt.date | None
+    data_solicitacao: dt.date
+
+    @classmethod
+    def from_model(cls, d: Devolucao) -> DevolucaoView:
+        return cls(
+            numero_devolucao=d.numero_devolucao,
+            numero_nf=d.nota_fiscal.numero_nf,
+            motivo=d.motivo,
+            status=d.status.value,
+            codigo_postagem=d.codigo_postagem,
+            prazo_postagem=d.prazo_postagem,
+            valor_credito=d.valor_credito,
+            data_credito=d.data_credito,
+            data_solicitacao=d.data_solicitacao,
+        )
+
+
+class FaturamentoView(BaseModel):
+    # Agregado read-only (envolve o dict de consultar_faturamento p/ uniformidade: BaseModel).
+    pedidos_total: int
+    pedidos_faturados: int
+    pedidos_a_faturar: int
+    valor_faturado: Decimal
+    valor_a_faturar: Decimal
+
+
 @dataclass
 class Ferramentas:
     repo: DadosRepository
@@ -188,6 +288,47 @@ class Ferramentas:
             return NaoEncontrado(mensagem="Não consegui localizar os dados da sua conta.")
         return ClienteView.from_model(c)
 
+    # --- FISCAL / FINANCEIRO (S14): read-only; cliente_id da SESSÃO, nunca do modelo ---
+    def consultar_nota_fiscal(self, numero_nf: int) -> NotaFiscalView | NaoEncontrado:
+        nf = self.repo.consultar_nota_fiscal(self.cliente_id, numero_nf)  # injeta cliente_id
+        if nf is None:
+            return NaoEncontrado(mensagem="Não encontrei essa nota fiscal.")
+        return NotaFiscalView.from_model(nf)
+
+    def listar_notas_fiscais(self) -> list[NotaFiscalView]:
+        return [
+            NotaFiscalView.from_model(nf) for nf in self.repo.listar_notas_fiscais(self.cliente_id)
+        ]
+
+    def consultar_titulo(self, numero_titulo: str) -> TituloView | NaoEncontrado:
+        t = self.repo.consultar_titulo(self.cliente_id, numero_titulo)
+        if t is None:
+            return NaoEncontrado(mensagem="Não encontrei esse título.")
+        return TituloView.from_model(t)
+
+    def listar_titulos(self, filtro_status: str | None = None) -> list[TituloView]:
+        if filtro_status is not None:
+            status = _status_titulo_ou_invalido(filtro_status)
+            if status is None:
+                return []  # status inválido -> lista vazia (não erro, não "todos")
+            titulos = self.repo.listar_titulos(self.cliente_id, status)
+        else:
+            titulos = self.repo.listar_titulos(self.cliente_id)
+        return [TituloView.from_model(t) for t in titulos]
+
+    def consultar_devolucao(self, numero_devolucao: str) -> DevolucaoView | NaoEncontrado:
+        d = self.repo.consultar_devolucao(self.cliente_id, numero_devolucao)
+        if d is None:
+            return NaoEncontrado(mensagem="Não encontrei essa devolução.")
+        return DevolucaoView.from_model(d)
+
+    def listar_devolucoes(self) -> list[DevolucaoView]:
+        return [DevolucaoView.from_model(d) for d in self.repo.listar_devolucoes(self.cliente_id)]
+
+    def consultar_faturamento(self) -> FaturamentoView:
+        # cliente_id da SESSÃO: a tool NÃO tem parâmetros. Envolve o dict do repo numa View.
+        return FaturamentoView(**self.repo.consultar_faturamento(self.cliente_id))
+
     # --- INTAKE: registra + avisa (NÃO executa, NÃO muta) ---
     def solicitar_cancelamento(
         self, numero_pedido: int, motivo: str | None = None
@@ -211,6 +352,23 @@ def _status_ou_none(valor: str | None) -> StatusPedido | None:
         return None
     try:
         return StatusPedido(valor)
+    except ValueError:
+        return None
+
+
+def _status_titulo_ou_invalido(valor: str) -> StatusTitulo | None:
+    """Converte o filtro de status do título -> StatusTitulo. None se inválido.
+
+    Aceita o NOME do membro (`em_aberto`/`pago`/`vencido`, como o schema declara) e também
+    o valor exibido (`"Em aberto"`/`"Pago"`/`"Vencido"`). Inválido -> None (a tool devolve
+    lista vazia, nunca erro).
+    """
+    try:
+        return StatusTitulo[valor]  # por nome (o que TOOL_DEFS expõe ao modelo)
+    except KeyError:
+        pass
+    try:
+        return StatusTitulo(valor)  # tolera o valor exibido
     except ValueError:
         return None
 
@@ -352,6 +510,100 @@ TOOL_DEFS: list[dict] = [
             "type": "object",
             "properties": {"motivo": {"type": "string"}},
             "required": ["motivo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_nota_fiscal",
+        "description": (
+            "Consulta uma nota fiscal do cliente pelo número. Use quando pedirem cópia/2ª "
+            "via de NF ou a posição de entrega de uma nota (transportadora, rastreio, prazo)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero_nf": {"type": "integer", "description": "Número da nota fiscal."}
+            },
+            "required": ["numero_nf"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "listar_notas_fiscais",
+        "description": "Lista as notas fiscais do cliente.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_titulo",
+        "description": (
+            "Consulta um título financeiro (duplicata/boleto) do cliente pelo número. Use "
+            "para cópia/2ª via de título ou situação de uma parcela."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"numero_titulo": {"type": "string", "description": "Número do título."}},
+            "required": ["numero_titulo"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "listar_titulos",
+        "description": (
+            "Lista os títulos financeiros do cliente (financeiro). Pode filtrar por situação."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filtro_status": {
+                    "type": "string",
+                    "enum": ["em_aberto", "pago", "vencido"],
+                    "description": "Situação para filtrar os títulos.",
+                }
+            },
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_devolucao",
+        "description": (
+            "Consulta uma devolução do cliente pelo número. Use para posição da devolução, "
+            "prazo/código de postagem e crédito gerado."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "numero_devolucao": {"type": "string", "description": "Número da devolução."}
+            },
+            "required": ["numero_devolucao"],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "listar_devolucoes",
+        "description": "Lista as devoluções do cliente, com situação e crédito.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
+    },
+    {
+        "name": "consultar_faturamento",
+        "description": (
+            "Resumo do faturamento do cliente: quantos pedidos já viraram nota fiscal e "
+            "quanto está faturado vs a faturar. Não recebe parâmetros."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "required": [],
             "additionalProperties": False,
         },
     },
