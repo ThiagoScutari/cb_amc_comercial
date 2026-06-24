@@ -8,7 +8,12 @@ os pedidos dele — os pedidos vêm de listar_pedidos, que já filtra por client
 import pytest
 from app.data.repository import MockRepository
 from app.data.seed import popular
-from app.report.resumo_pedidos import gerar_html_pedidos
+from app.report.resumo_pedidos import (
+    gerar_html_devolucoes,
+    gerar_html_notas,
+    gerar_html_pedidos,
+    gerar_html_titulos,
+)
 
 
 @pytest.fixture
@@ -58,3 +63,62 @@ def test_sem_efeito_de_rede_ou_cdn_no_html(repo):
     html = gerar_html_pedidos("Boutique Aurora", repo.listar_pedidos(1))
     assert "cdn.jsdelivr" not in html
     assert "<script src" not in html
+
+
+# ---------- S16: renderers de NF / título / devolução ----------
+def test_html_notas_contem_dados(repo):
+    html = gerar_html_notas("Boutique Aurora", repo.listar_notas_fiscais(1))
+    assert "<!DOCTYPE html>" in html and "</html>" in html
+    assert "Notas Fiscais" in html and "Boutique Aurora" in html
+    assert "60001" in html  # número da NF do cliente-demo
+    assert "R$" in html and "/2026" in html
+
+
+def test_html_titulos_mostra_vencidos(repo):
+    html = gerar_html_titulos("Loja", repo.listar_titulos(1))
+    assert "70013" in html  # título vencido do seed
+    assert "Vencido" in html
+
+
+def test_html_devolucoes_contem_status_e_credito(repo):
+    html = gerar_html_devolucoes("Loja", repo.listar_devolucoes(1))
+    assert "80003" in html  # devolução com crédito gerado
+    assert "Crédito gerado" in html
+
+
+def test_listas_vazias_geram_html_valido():
+    for gen, marca in [
+        (gerar_html_notas, "nota fiscal"),
+        (gerar_html_titulos, "título"),
+        (gerar_html_devolucoes, "devolução"),
+    ]:
+        html = gen("Loja Vazia", [])
+        assert "<!DOCTYPE html>" in html and "</html>" in html
+        assert marca in html.lower()  # estado vazio menciona a entidade
+
+
+def test_autoescape_neutraliza_xss_no_motivo_de_devolucao(repo):
+    # campo de texto livre (motivo) com <script> é ESCAPADO, não executado.
+    devs = repo.listar_devolucoes(1)
+    devs[0].motivo = "<script>alert('x')</script>"
+    html = gerar_html_devolucoes("Loja", devs)
+    assert "<script>alert" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_novos_renderers_sem_cdn_nem_script(repo):
+    for html in (
+        gerar_html_notas("Loja", repo.listar_notas_fiscais(1)),
+        gerar_html_titulos("Loja", repo.listar_titulos(1)),
+        gerar_html_devolucoes("Loja", repo.listar_devolucoes(1)),
+    ):
+        assert "cdn.jsdelivr" not in html and "<script src" not in html
+
+
+def test_renderer_so_pinta_a_lista_recebida(repo):
+    # Isolamento: o renderer só mostra o que recebe (lista do dono, já filtrada por cliente_id).
+    nfs_2 = repo.listar_notas_fiscais(2)  # NFs do cliente 2
+    html_1 = gerar_html_notas("Cliente 1", repo.listar_notas_fiscais(1))
+    assert nfs_2  # sanidade: cliente 2 tem NF no seed
+    for nf in nfs_2:
+        assert str(nf.numero_nf) not in html_1  # nenhuma NF do cliente 2 no HTML do cliente 1

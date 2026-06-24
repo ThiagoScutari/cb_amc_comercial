@@ -46,7 +46,12 @@ from app.auth.session import SessaoNegada, resolver_sessao
 from app.config import Settings, get_settings
 from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
-from app.report.resumo_pedidos import gerar_html_pedidos
+from app.report.resumo_pedidos import (
+    gerar_html_devolucoes,
+    gerar_html_notas,
+    gerar_html_pedidos,
+    gerar_html_titulos,
+)
 from app.voice.fala import para_fala
 
 logger = logging.getLogger("cb_amc_comercial.whatsapp")
@@ -80,6 +85,34 @@ _GATILHOS_RESUMO = (
 def _quer_resumo_visual(texto: str | None) -> bool:
     t = (texto or "").lower()
     return any(g in t for g in _GATILHOS_RESUMO)
+
+
+# Gatilhos das LISTAS visuais das entidades novas (S16). Curados p/ NÃO colidir com os de
+# pedido (ex.: "meus pedidos" não casa nenhum destes).
+_GATILHOS_NOTAS = ("minhas notas", "notas fiscais", "minhas nf", "lista de notas")
+_GATILHOS_TITULOS = (
+    "meus títulos",
+    "meus titulos",
+    "meus boletos",
+    "situação financeira",
+    "meus vencimentos",
+)
+_GATILHOS_DEVOLUCOES = ("minhas devoluções", "minhas devolucoes", "status das devoluções")
+
+
+def _entidade_visual(texto: str | None) -> str | None:
+    """Qual LISTA visual o texto pede? PEDIDO tem prioridade (preserva o comportamento
+    atual). None se nenhuma casar — aí não sai HTML, igual a hoje."""
+    t = (texto or "").lower()
+    if _quer_resumo_visual(texto):
+        return "pedidos"
+    if any(g in t for g in _GATILHOS_NOTAS):
+        return "notas"
+    if any(g in t for g in _GATILHOS_TITULOS):
+        return "titulos"
+    if any(g in t for g in _GATILHOS_DEVOLUCOES):
+        return "devolucoes"
+    return None
 
 
 @dataclass(frozen=True)
@@ -222,8 +255,13 @@ class Dispatcher:
             # ADITIVO: resumo visual em HTML (diferencial da demo). Roda DEPOIS do texto
             # já garantido; QUALQUER falha (geração ou envio) degrada em silêncio — o
             # cliente já recebeu a resposta em texto (listando os pedidos). Nunca quebra.
-            if _quer_resumo_visual(texto):
+            entidade = _entidade_visual(texto)
+            if entidade == "pedidos":  # caminho ORIGINAL inalterado (pedidos)
                 await self._enviar_resumo_html(msg.telefone, repo, sessao.cliente_id, sessao.nome)
+            elif entidade is not None:  # NF/título/devolução (S16)
+                await self._enviar_lista_html(
+                    msg.telefone, repo, sessao.cliente_id, sessao.nome, entidade
+                )
 
     async def _ack_apos_intervalo(self, telefone: str) -> None:
         """Espera o limiar e SÓ ENTÃO envia o ack de espera. Cancelado se a resposta vier
@@ -259,6 +297,31 @@ class Dispatcher:
             )
         except Exception as exc:  # noqa: BLE001 - ADITIVO: o HTML nunca pode derrubar o fluxo (§15)
             logger.warning("resumo HTML falhou (aditivo, ignorado): %s", str(exc)[:120])
+
+    async def _enviar_lista_html(
+        self, telefone, repo, cliente_id: int, nome: str | None, entidade: str
+    ) -> None:
+        """Lista visual de NF/título/devolução em HTML. ADITIVO e best-effort, igual ao
+        resumo de pedidos: try/except amplo (HTML falhou, a conversa segue). Anti-IDOR: os
+        `listar_*` filtram pelo cliente_id da sessão; o renderer só pinta a lista recebida."""
+        nome = nome or "Cliente"
+        try:
+            if entidade == "notas":
+                html = gerar_html_notas(nome, repo.listar_notas_fiscais(cliente_id))
+                filename, caption = "Notas Fiscais.html", "Aqui estão as suas notas fiscais."
+            elif entidade == "titulos":
+                html = gerar_html_titulos(nome, repo.listar_titulos(cliente_id))
+                filename, caption = "Titulos.html", "Aqui estão os seus títulos."
+            elif entidade == "devolucoes":
+                html = gerar_html_devolucoes(nome, repo.listar_devolucoes(cliente_id))
+                filename, caption = "Devolucoes.html", "Aqui estão as suas devoluções."
+            else:
+                return
+            await self.client.enviar_documento(
+                telefone, html.encode("utf-8"), filename=filename, caption=caption
+            )
+        except Exception as exc:  # noqa: BLE001 - ADITIVO: o HTML nunca pode derrubar o fluxo (§15)
+            logger.warning("lista HTML falhou (aditivo, ignorado): %s", str(exc)[:120])
 
     async def aclose(self) -> None:
         fechar = getattr(self.client, "aclose", None)

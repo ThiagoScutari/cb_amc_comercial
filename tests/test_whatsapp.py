@@ -108,15 +108,27 @@ class FakeCliente:
 
 
 class FakeRepo:
-    def __init__(self, cliente, pedidos=None):
+    def __init__(self, cliente, pedidos=None, notas=None, titulos=None, devolucoes=None):
         self._cliente = cliente
         self._pedidos = pedidos or []
+        self._notas = notas or []
+        self._titulos = titulos or []
+        self._devolucoes = devolucoes or []
 
     def cliente_por_telefone(self, telefone):
         return self._cliente
 
     def listar_pedidos(self, cliente_id, filtro_status=None):
         return self._pedidos  # já "filtrado": só os pedidos deste cliente
+
+    def listar_notas_fiscais(self, cliente_id):
+        return self._notas
+
+    def listar_titulos(self, cliente_id, filtro_status=None):
+        return self._titulos
+
+    def listar_devolucoes(self, cliente_id):
+        return self._devolucoes
 
 
 @contextlib.contextmanager
@@ -337,6 +349,57 @@ async def test_documento_que_falha_nao_quebra_o_texto():
     await disp.processar(_texto_payload("meus pedidos"))
     assert len(client.textos) == 1  # texto entregue mesmo com o HTML falhando
     assert len(client.documentos) == 0  # nada registrado (falhou e foi engolido)
+
+
+# ---------- S16: listas visuais de NF / título / devolução (aditivo) ----------
+def test_entidade_visual_classifica_e_prioriza_pedidos():
+    from app.whatsapp.router import _entidade_visual
+
+    assert _entidade_visual("meus pedidos") == "pedidos"
+    assert _entidade_visual("me manda minhas notas fiscais") == "notas"
+    assert _entidade_visual("quero ver meus boletos") == "titulos"
+    assert _entidade_visual("status das devoluções") == "devolucoes"
+    assert _entidade_visual("oi, tudo bem?") is None
+    # pedido tem PRIORIDADE quando dois gatilhos aparecem (sem colisão observável)
+    assert _entidade_visual("meus pedidos e minhas notas") == "pedidos"
+
+
+async def test_gatilho_notas_envia_documento():
+    # FakeRepo devolve lista vazia -> só validamos o ROTEAMENTO (filename + HTML válido).
+    # O conteúdo com dados reais é testado em test_resumo_pedidos.py (repo seedado).
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("me manda minhas notas fiscais"))
+    assert len(client.textos) == 1
+    tel, conteudo, fname = client.documentos[0]
+    assert fname == "Notas Fiscais.html"
+    assert b"<!DOCTYPE html>" in conteudo
+
+
+async def test_gatilho_titulos_envia_documento():
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("quero ver meus boletos"))
+    assert client.documentos[0][2] == "Titulos.html"
+
+
+async def test_gatilho_devolucoes_envia_documento():
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("status das devoluções"))
+    assert client.documentos[0][2] == "Devolucoes.html"
+
+
+async def test_meus_pedidos_ainda_cai_em_pedidos_sem_colisao():
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("meus pedidos"))
+    assert client.documentos[0][2] == "Resumo de Pedidos.html"
+
+
+async def test_lista_html_que_falha_nao_quebra_o_texto():
+    # o caminho novo (NF/título/devolução) degrada igual ao de pedidos.
+    disp, client, orq, stt, tts = _make()
+    client.falha_documento = True
+    await disp.processar(_texto_payload("minhas notas fiscais"))
+    assert len(client.textos) == 1
+    assert len(client.documentos) == 0
 
 
 async def test_audio_que_nao_baixa_pede_para_repetir_sem_chamar_agente():
