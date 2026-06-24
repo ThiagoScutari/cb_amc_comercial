@@ -76,6 +76,35 @@ class StatusSolicitacao(enum.StrEnum):
     pendente = "pendente"
 
 
+class StatusEntrega(enum.StrEnum):
+    """Posição de entrega de uma NF-e (rastreio sintético, read-only) — S11."""
+
+    emitida = "Emitida"
+    coletada = "Coletada"
+    em_transito = "Em trânsito"
+    entregue = "Entregue"
+
+
+class StatusTitulo(enum.StrEnum):
+    """Situação de um título financeiro / duplicata (read-only) — S11."""
+
+    em_aberto = "Em aberto"
+    pago = "Pago"
+    vencido = "Vencido"
+
+
+class StatusDevolucao(enum.StrEnum):
+    """Ciclo de uma devolução até a geração de crédito (read-only) — S11."""
+
+    solicitada = "Solicitada"
+    em_analise = "Em análise"
+    aguardando_postagem = "Aguardando postagem"
+    prazo_postagem_expirado = "Prazo de postagem expirado"
+    em_transito = "Em trânsito"
+    recebida = "Recebida"
+    credito_gerado = "Crédito gerado"
+
+
 # Um pedido está "faturado" a partir do status Faturado (divisor disponível↔reservado,
 # spec §5.4). Os ramos de cancelamento NÃO contam como faturado no mock.
 STATUS_FATURADOS: frozenset[StatusPedido] = frozenset(
@@ -123,6 +152,10 @@ class Cliente(Base):
 
     pedidos: Mapped[list["Pedido"]] = relationship(back_populates="cliente")
     solicitacoes: Mapped[list["Solicitacao"]] = relationship(back_populates="cliente")
+    # S11 — entidades fiscais/financeiras (carregam cliente_id; isolamento na fase futura):
+    notas_fiscais: Mapped[list["NotaFiscal"]] = relationship(back_populates="cliente")
+    titulos: Mapped[list["Titulo"]] = relationship(back_populates="cliente")
+    devolucoes: Mapped[list["Devolucao"]] = relationship(back_populates="cliente")
 
 
 class Produto(Base):
@@ -235,3 +268,92 @@ class Solicitacao(Base):
     )
 
     cliente: Mapped["Cliente"] = relationship(back_populates="solicitacoes")
+
+
+class NotaFiscal(Base):
+    """NF-e sintética: elo pedido ↔ entrega ↔ financeiro. Read-only (S11).
+
+    Carrega `cliente_id` como âncora anti-IDOR (princípio 2), igual a `Pedido` —
+    o filtro por cliente_id no repository é da fase futura (S12). `pedido_id` é a
+    via para validar posse de NFs amarradas a pedido (anti-IDOR de leitura, S12).
+    """
+
+    __tablename__ = "notas_fiscais"
+
+    # PK inteira INSERÍVEL (igual a Pedido): o seed atribui o número.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    numero_nf: Mapped[int] = mapped_column(Integer, unique=True, index=True)
+    cliente_id: Mapped[int] = mapped_column(ForeignKey("clientes.id"), index=True)
+    pedido_id: Mapped[int] = mapped_column(ForeignKey("pedidos.id"), index=True)
+    data_emissao: Mapped[dt.date] = mapped_column(Date)
+    chave_acesso: Mapped[str] = mapped_column(String(44))  # 44 díg. da NF-e (sintética)
+    valor_total: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    # create_constraint=True: emite o CHECK de fato (o default do SQLAlchemy 2.0 é False).
+    status_entrega: Mapped[StatusEntrega] = mapped_column(
+        Enum(StatusEntrega, native_enum=False, create_constraint=True)
+    )
+    transportadora: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    codigo_rastreio: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    data_prevista_entrega: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    data_entrega: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+
+    cliente: Mapped["Cliente"] = relationship(back_populates="notas_fiscais")
+    pedido: Mapped["Pedido"] = relationship()  # via única; Pedido não tem inverso (S11)
+    titulos: Mapped[list["Titulo"]] = relationship(back_populates="nota_fiscal")
+    devolucoes: Mapped[list["Devolucao"]] = relationship(back_populates="nota_fiscal")
+
+
+class Titulo(Base):
+    """Título financeiro (duplicata) ligado a uma NF. Carrega cliente_id (S11)."""
+
+    __tablename__ = "titulos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    numero_titulo: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    cliente_id: Mapped[int] = mapped_column(ForeignKey("clientes.id"), index=True)
+    nota_fiscal_id: Mapped[int] = mapped_column(ForeignKey("notas_fiscais.id"), index=True)
+    parcela: Mapped[str] = mapped_column(String(8))  # ex. "1/3"
+    valor: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    data_vencimento: Mapped[dt.date] = mapped_column(Date)
+    status: Mapped[StatusTitulo] = mapped_column(
+        Enum(StatusTitulo, native_enum=False, create_constraint=True)
+    )
+    data_pagamento: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    linha_digitavel: Mapped[str] = mapped_column(String(60))  # sintética
+
+    cliente: Mapped["Cliente"] = relationship(back_populates="titulos")
+    nota_fiscal: Mapped["NotaFiscal"] = relationship(back_populates="titulos")
+
+
+class Devolucao(Base):
+    """Devolução até a geração de crédito (read-only). Carrega cliente_id (S11).
+
+    O crédito (`valor_credito`/`data_credito`) é DADO PRÉ-SEMEADO no mock, não uma
+    ação em runtime — o bot continua somente-leitura (princípio 4).
+    """
+
+    __tablename__ = "devolucoes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    numero_devolucao: Mapped[str] = mapped_column(String(20), unique=True, index=True)
+    cliente_id: Mapped[int] = mapped_column(ForeignKey("clientes.id"), index=True)
+    nota_fiscal_id: Mapped[int] = mapped_column(ForeignKey("notas_fiscais.id"), index=True)
+    motivo: Mapped[str] = mapped_column(String(120))
+    status: Mapped[StatusDevolucao] = mapped_column(
+        Enum(StatusDevolucao, native_enum=False, create_constraint=True)
+    )
+    codigo_postagem: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    prazo_postagem: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    valor_credito: Mapped[Decimal | None] = mapped_column(Numeric(12, 2), nullable=True)
+    data_credito: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    data_solicitacao: Mapped[dt.date] = mapped_column(Date)
+
+    __table_args__ = (
+        CheckConstraint(
+            "valor_credito IS NULL OR valor_credito >= 0",
+            name="ck_devolucao_credito_nao_negativo",
+        ),
+    )
+
+    cliente: Mapped["Cliente"] = relationship(back_populates="devolucoes")
+    nota_fiscal: Mapped["NotaFiscal"] = relationship(back_populates="devolucoes")
