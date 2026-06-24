@@ -18,11 +18,31 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from decimal import Decimal
 
 from app.data.db import criar_engine, criar_sessionmaker
-from app.data.models import Cliente, Pedido, Produto, Solicitacao, StatusPedido
+from app.data.models import (
+    STATUS_FATURADOS,
+    Cliente,
+    Devolucao,
+    NotaFiscal,
+    Pedido,
+    Produto,
+    Solicitacao,
+    StatusDevolucao,
+    StatusEntrega,
+    StatusPedido,
+    Titulo,
+)
 from app.data.repository import normalizar_telefone
-from app.data.seed import criar_pedido
+from app.data.seed import (
+    _itens_demo,
+    _parcelas_dias,
+    criar_devolucao,
+    criar_nota_fiscal,
+    criar_pedido,
+    criar_titulos,
+)
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
@@ -87,14 +107,21 @@ def _faixa_do_cliente(session: Session, cliente_id: int) -> int:
 
 
 def _limpar_demo(session: Session, cliente_id: int, base: int) -> None:
-    """Apaga os pedidos da faixa do cliente (cascade apaga itens). Solicitações que
-    apontam para esses pedidos são removidas ANTES (FK pedido_id)."""
+    """Apaga pedidos + FISCAL da faixa do cliente, FK-safe (idempotência do cadastro, S17b).
+
+    Ordem: solicitações + devoluções/títulos (referenciam NF) -> NFs (referenciam pedido) ->
+    pedidos (cascade apaga itens). O cadastrado tem só ESTE bloco, então o fiscal é removido
+    por cliente_id (não colide com o seed, que é de outros clientes).
+    """
     ids = list(range(base, base + len(_TEMPLATE)))
     session.execute(
         delete(Solicitacao).where(
             Solicitacao.cliente_id == cliente_id, Solicitacao.pedido_id.in_(ids)
         )
     )
+    session.execute(delete(Devolucao).where(Devolucao.cliente_id == cliente_id))
+    session.execute(delete(Titulo).where(Titulo.cliente_id == cliente_id))
+    session.execute(delete(NotaFiscal).where(NotaFiscal.cliente_id == cliente_id))
     for p in session.scalars(
         select(Pedido).where(Pedido.cliente_id == cliente_id, Pedido.id.in_(ids))
     ).all():
@@ -102,13 +129,72 @@ def _limpar_demo(session: Session, cliente_id: int, base: int) -> None:
     session.flush()
 
 
-def _itens(papel: str, offset: int, produtos_ord: list[Produto]) -> list[tuple[str, int]]:
+def _itens(papel: str, numero: int, produtos_ord: list[Produto]) -> list[tuple[str, int]]:
+    """Grade engordada (S17b), reusando _itens_demo do seed (não duplica a regra). A camiseta
+    âncora entra como FIXO nos papéis cancelável/consultável; o resto preenche 5–10 SKUs."""
     if papel == "cancelavel":
-        return [(_SKU_CAMISETA, 30)]
+        return _itens_demo(numero, produtos_ord, fixos=[(_SKU_CAMISETA, 30)])
     if papel == "consultavel":
-        return [(_SKU_CAMISETA, 200)]
-    sku = produtos_ord[(offset * 7 + 3) % len(produtos_ord)].sku  # filler real determinístico
-    return [(sku, 6 + offset)]
+        return _itens_demo(numero, produtos_ord, fixos=[(_SKU_CAMISETA, 200)])
+    return _itens_demo(numero, produtos_ord)
+
+
+def _status_entrega(status: StatusPedido) -> StatusEntrega:
+    """Status de entrega da NF coerente com o status do pedido (faturado -> emitida)."""
+    if status == StatusPedido.entregue:
+        return StatusEntrega.entregue
+    if status in (StatusPedido.em_transito, StatusPedido.despachado):
+        return StatusEntrega.em_transito
+    if status == StatusPedido.em_separacao:
+        return StatusEntrega.coletada
+    return StatusEntrega.emitida
+
+
+def _criar_fiscal(session: Session, pedidos: list[Pedido], base: int, condicao: str) -> None:
+    """NF/título/devolução para o cliente cadastrado (S17b), reusando os helpers do seed.
+
+    Numeração na faixa 90xxx por BLOCO do cliente — disjunta do seed (60/70/80xxx) e entre
+    clientes; re-run no mesmo telefone reusa o MESMO bloco (idempotente via _limpar_demo).
+    Determinismo aqui = valores batem entre si (NF=pedido, Σparcelas=NF, crédito=NF), NÃO
+    reproduzir o mesmo banco (o cliente é autoincrement).
+    """
+    bloco = (base - FAIXA_BASE) // FAIXA_STEP
+    faturados = [p for p in pedidos if p.status in STATUS_FATURADOS]
+    nfs: list[NotaFiscal] = []
+    for i, ped in enumerate(faturados):
+        nf = criar_nota_fiscal(
+            90000 + bloco * 10 + i,
+            ped,
+            _status_entrega(ped.status),
+            com_prevista=ped.status in (StatusPedido.em_transito, StatusPedido.despachado),
+            com_entrega=ped.status == StatusPedido.entregue,
+        )
+        session.add(nf)
+        nfs.append(nf)
+    session.flush()  # NFs têm id p/ os títulos/devoluções referenciarem
+    # títulos: nº de parcelas vem da condição do cliente; mix de status (1ª NF com parcela 1 paga)
+    dias = _parcelas_dias(condicao)
+    prox_titulo = 91000 + bloco * 100
+    for j, nf in enumerate(nfs):
+        titulos = criar_titulos(prox_titulo, nf, dias, parcela_paga=1 if j == 0 else None)
+        session.add_all(titulos)
+        prox_titulo += len(titulos)
+    # ao menos 1 devolução (crédito gerado) na 1ª NF
+    if nfs:
+        nf0 = nfs[0]
+        session.add(
+            criar_devolucao(
+                f"{92000 + bloco * 10}",
+                nf0,
+                StatusDevolucao.credito_gerado,
+                "Coleção trocada",
+                codigo_postagem="DD111222333BR",
+                dias_prazo=-15,
+                valor_credito=nf0.valor_total.quantize(Decimal("0.01")),
+                dias_credito=-8,
+                dias_solicitacao=-30,
+            )
+        )
 
 
 def cadastrar(
@@ -155,14 +241,19 @@ def cadastrar(
         base = _proxima_faixa(session)
 
     cancelavel = consultavel = base
+    pedidos: list[Pedido] = []
     for offset, status, papel in _TEMPLATE:
         numero = base + offset
-        itens = _itens(papel, offset, produtos_ord)
-        session.add(criar_pedido(numero, cliente.id, status, itens, prod_by_sku))
+        itens = _itens(papel, numero, produtos_ord)  # grade engordada (S17b)
+        ped = criar_pedido(numero, cliente.id, status, itens, prod_by_sku)
+        session.add(ped)
+        pedidos.append(ped)
         if papel == "cancelavel":
             cancelavel = numero
         elif papel == "consultavel":
             consultavel = numero
+    session.flush()  # pedidos têm id; FK-safe para a NF
+    _criar_fiscal(session, pedidos, base, cliente.condicao_pagamento)  # NF/título/devolução
     session.flush()
     return ResumoCadastro(
         acao, nome, norm, base, base + len(_TEMPLATE) - 1, cancelavel, consultavel

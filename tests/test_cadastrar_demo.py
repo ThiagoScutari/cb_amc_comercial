@@ -10,7 +10,7 @@ from decimal import Decimal
 import pytest
 from app.agent.tools import Ferramentas, NaoEncontrado, PedidoView
 from app.auth.session import SessaoAutenticada, resolver_sessao
-from app.data.models import Pedido, StatusPedido
+from app.data.models import Devolucao, NotaFiscal, Pedido, StatusPedido, Titulo
 from app.data.repository import MockRepository
 from app.data.seed import popular
 from scripts.cadastrar_demo import FAIXA_BASE, ResumoCadastro, cadastrar
@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 @pytest.fixture
 def repo(session) -> MockRepository:
-    popular(session)  # seed real: clientes 1..10, pedidos 4471..4479 e 4450..4467
+    popular(session)  # seed real: clientes 1..3, pedidos 4471..4479 e 4450..4453
     session.flush()
     return MockRepository(session)
 
@@ -116,3 +116,77 @@ def _cliente_id_por_tel(repo, telefone) -> int:
     c = repo.cliente_por_telefone(telefone)
     assert c is not None
     return c.id
+
+
+# ---------- S17b: fiscal (NF/título/devolução) do cliente cadastrado ----------
+def _fiscal(repo, cid):
+    nfs = repo.session.scalars(select(NotaFiscal).where(NotaFiscal.cliente_id == cid)).all()
+    tits = repo.session.scalars(select(Titulo).where(Titulo.cliente_id == cid)).all()
+    devs = repo.session.scalars(select(Devolucao).where(Devolucao.cliente_id == cid)).all()
+    return list(nfs), list(tits), list(devs)
+
+
+def test_cadastro_cria_fiscal_na_faixa_90xxx(repo):
+    cadastrar(repo.session, "5547999998888", "Boutique do João")
+    cid = _cliente_id_por_tel(repo, "5547999998888")
+    nfs, tits, devs = _fiscal(repo, cid)
+    assert (
+        len(nfs) == 3 and tits and devs
+    )  # 3 pedidos faturados -> 3 NFs; títulos e ao menos 1 devol.
+    assert all(90000 <= nf.numero_nf < 93000 for nf in nfs)
+    assert all(t.numero_titulo.startswith("91") for t in tits)
+    assert all(d.numero_devolucao.startswith("92") for d in devs)
+
+
+def test_fiscal_cadastrado_invariantes(repo):
+    cadastrar(repo.session, "5547999998888", "Boutique do João")
+    cid = _cliente_id_por_tel(repo, "5547999998888")
+    nfs, _, devs = _fiscal(repo, cid)
+    for nf in nfs:
+        assert nf.valor_total == repo.session.get(Pedido, nf.pedido_id).valor_total  # NF = pedido
+        soma = sum(
+            (
+                t.valor
+                for t in repo.session.scalars(
+                    select(Titulo).where(Titulo.nota_fiscal_id == nf.id)
+                ).all()
+            ),
+            Decimal("0"),
+        )
+        assert soma == nf.valor_total  # Σ parcelas == NF
+    for d in devs:  # crédito = valor da NF
+        assert d.valor_credito == repo.session.get(NotaFiscal, d.nota_fiscal_id).valor_total
+
+
+def test_fiscal_numeracao_disjunta_entre_clientes_e_do_seed(repo):
+    cadastrar(repo.session, "5547999998888", "Loja Um")
+    cadastrar(repo.session, "5531977776666", "Loja Dois")
+    cid1 = _cliente_id_por_tel(repo, "5547999998888")
+    cid2 = _cliente_id_por_tel(repo, "5531977776666")
+    nf1 = {nf.numero_nf for nf in _fiscal(repo, cid1)[0]}
+    nf2 = {nf.numero_nf for nf in _fiscal(repo, cid2)[0]}
+    assert nf1 and nf2 and nf1.isdisjoint(nf2)  # entre cadastrados
+    seed_nfs = {
+        nf.numero_nf
+        for nf in repo.session.scalars(
+            select(NotaFiscal).where(NotaFiscal.cliente_id.in_([1, 2]))
+        ).all()
+    }
+    assert nf1.isdisjoint(seed_nfs) and nf2.isdisjoint(seed_nfs)  # disjunto do seed (60xxx)
+
+
+def test_fiscal_idempotente_rerun_nao_duplica(repo):
+    cadastrar(repo.session, "5547999998888", "Boutique do João")
+    cid = _cliente_id_por_tel(repo, "5547999998888")
+    cadastrar(repo.session, "5547999998888", "Boutique do João (re)")  # re-run mesmo telefone
+    nfs, _, devs = _fiscal(repo, cid)
+    assert len(nfs) == 3 and len(devs) == 1  # não duplicou
+
+
+def test_fiscal_cadastrado_anti_idor(repo):
+    cadastrar(repo.session, "5547999998888", "Loja Um")
+    cid1 = _cliente_id_por_tel(repo, "5547999998888")
+    nf1 = _fiscal(repo, cid1)[0][0].numero_nf
+    assert repo.consultar_nota_fiscal(1, nf1) is None  # cliente do seed não vê a NF do cadastrado
+    assert repo.consultar_nota_fiscal(cid1, 60001) is None  # cadastrado não vê a NF do seed
+    assert repo.consultar_nota_fiscal(cid1, nf1) is not None  # mas vê a própria

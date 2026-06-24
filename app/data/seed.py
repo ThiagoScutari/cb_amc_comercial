@@ -214,16 +214,41 @@ def _saldo_baseline(i: int) -> int:
     return 15 + (i * 7) % 60
 
 
+def _itens_demo(
+    semente: int,
+    produtos_ord: list[Produto],
+    fixos: list[tuple[str, int]] | None = None,
+) -> list[tuple[str, int]]:
+    """Grade realista de 5–10 SKUs DISTINTOS, determinística por `semente` (S17b).
+
+    `fixos` (âncoras de demo, ex. a camiseta do 4471) entram PRIMEIRO; o resto preenche até
+    o alvo sem repetir SKU. Quantidades de grade 6..36. Fonte ÚNICA da regra de engorda —
+    reusada pelo seed e pelo cadastrar_demo. ZERO random/data (regra de ouro).
+    """
+    itens = list(fixos) if fixos else []
+    usados = {sku for sku, _ in itens}
+    n = len(produtos_ord)
+    alvo = 5 + (semente % 6)  # 5..10 itens no total
+    i = 0
+    while len(itens) < alvo:
+        sku = produtos_ord[(semente * 31 + i * 7) % n].sku
+        if sku not in usados:  # garante SKUs distintos (produtos_ord é deduplicado por sku)
+            usados.add(sku)
+            itens.append((sku, 6 + ((semente + i) % 31)))  # grade 6..36, determinística
+        i += 1
+    return itens
+
+
 def _plano_pedidos(
-    sku_idx, clientes: list[dict]
+    produtos_ord: list[Produto], clientes: list[dict]
 ) -> list[tuple[int, int, StatusPedido, list[tuple[str, int]]]]:
-    """(numero, cliente_id, status, [(sku, quantidade)]) — determinístico."""
+    """(numero, cliente_id, status, [(sku, quantidade)]) — determinístico; pedidos GORDOS."""
     planos: list[tuple[int, int, StatusPedido, list[tuple[str, int]]]] = []
-    # cliente-demo: um pedido por status
-    for i, (numero, status) in enumerate(_DEMO_PEDIDOS):
-        itens = _DEMO_ITENS.get(numero) or [(sku_idx(17 + i * 13), 6 + i)]
+    # cliente-demo: um pedido por status — todos engordados; âncoras 4471/4479 entram como fixos.
+    for numero, status in _DEMO_PEDIDOS:
+        itens = _itens_demo(numero, produtos_ord, fixos=_DEMO_ITENS.get(numero))
         planos.append((numero, DEMO_CLIENTE_ID, status, itens))
-    # demais clientes (id 2..3): 2 pedidos cada, números 4450..4453
+    # demais clientes (id 2..3): 2 pedidos cada, números 4450..4453 — engordados
     numero = 4450
     k = 0
     for cliente in clientes:
@@ -231,7 +256,7 @@ def _plano_pedidos(
             continue
         for _ in range(2):
             status = _CICLO_OUTROS[k % len(_CICLO_OUTROS)]
-            itens = [(sku_idx(k * 9 + 3), 4 + (k % 5))]
+            itens = _itens_demo(numero, produtos_ord)  # semente = número do pedido
             planos.append((numero, cliente["id"], status, itens))
             numero += 1
             k += 1
@@ -507,14 +532,11 @@ def popular(session: Session) -> None:
     prod_by_sku = {p.sku: p for p in produtos}
     produtos_ord = sorted(produtos, key=lambda p: p.sku)
 
-    def sku_idx(i: int) -> str:
-        return produtos_ord[i % len(produtos_ord)].sku
-
     # 3) pedidos + itens (valor_total = soma dos itens) e acúmulo p/ estoque
     reservado: dict[int, int] = defaultdict(int)
     disponivel: dict[int, int] = defaultdict(int)
     ped_by_id: dict[int, Pedido] = {}  # reusado pelo passo 6 (NF/título/devolução)
-    for numero, cliente_id, status, itens in _plano_pedidos(sku_idx, clientes):
+    for numero, cliente_id, status, itens in _plano_pedidos(produtos_ord, clientes):
         pedido = criar_pedido(numero, cliente_id, status, itens, prod_by_sku)
         # bucket de estoque: faturado->reservado; não-faturado e não-cancelado->disponivel.
         if status in STATUS_FATURADOS:

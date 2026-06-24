@@ -114,6 +114,21 @@ def test_camiseta_demo_e_compravel(db):
     assert est.saldo > 0  # "tem camiseta ... M pra comprar?" -> saldo>0
 
 
+# ---------- S17b: grade realista (5–10 SKUs por pedido) ----------
+def test_pedidos_tem_grade_realista_5_a_10_skus_distintos(db):
+    for p in db.scalars(select(Pedido)).all():
+        skus = [it.sku_id for it in p.itens]
+        assert 5 <= len(skus) <= 10, (p.id, len(skus))  # engorda
+        assert len(skus) == len(set(skus)), f"SKU repetido no pedido {p.id}"
+
+
+def test_pedido_4471_engordado_mantem_a_camiseta_ancora(db):
+    p = db.get(Pedido, 4471)
+    skus = {it.sku.sku for it in p.itens}
+    assert "340103413-M" in skus  # âncora (camiseta branca M) preservada na grade
+    assert 5 <= len(p.itens) <= 10
+
+
 def test_todos_os_status_cobertos_no_cliente_demo(db):
     status = {
         p.status
