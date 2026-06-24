@@ -134,3 +134,108 @@ def test_erro_interno_degrada_para_o_texto_original(monkeypatch):
 
 def test_texto_sem_numeros_inalterado():
     assert para_fala("Oi, tudo bem? Posso ajudar.") == "Oi, tudo bem? Posso ajudar."
+
+
+# ---------- S18a: valores grandes (milhão/bilhão) — a engorda da S17 criou valores de milhão ----
+def test_valor_milhao_da_demo():
+    # R$ 1.282.540,70 (pedido real da demo): ANTES degradava a frase TODA pro cru; agora fala
+    out = para_fala("R$ 1.282.540,70")
+    assert "R$" not in out and "1.282.540" not in out
+    assert out == "cerca de um milhão duzentos e oitenta e dois mil e quinhentos reais"
+
+
+def test_valor_milhoes_da_demo():
+    out = para_fala("R$ 2.603.247,50")
+    assert out == "cerca de dois milhões seiscentos e três mil e duzentos reais"
+
+
+def test_cardinal_bordas_do_milhao():
+    from app.voice.fala import _cardinal
+
+    assert _cardinal(999999) == "novecentos e noventa e nove mil novecentos e noventa e nove"
+    assert _cardinal(1_000_000) == "um milhão"
+    assert _cardinal(1_002_000) == "um milhão e dois mil"  # zeros intermediários
+    assert _cardinal(2_000_000) == "dois milhões"  # plural
+
+
+def test_cardinal_bilhao_por_seguranca():
+    from app.voice.fala import _cardinal
+
+    assert _cardinal(1_000_000_000) == "um bilhão"
+    assert _cardinal(2_000_000_000) == "dois bilhões"
+
+
+def test_milhao_nao_envenena_o_resto_da_frase():
+    # REGRESSÃO do bug A1: um valor de milhão não pode mais deixar pedido/data crus pro TTS.
+    entrada = "Pedido 4477 entregue, no valor de R$ 1.282.540,70, em 07/05/2026."
+    out = para_fala(entrada)
+    assert "quatro mil quatrocentos e setenta e sete" in out  # pedido convertido
+    assert "milhão" in out  # valor convertido
+    assert "sete de maio de 2026" in out  # data convertida
+    assert "R$" not in out and "1.282.540" not in out  # nada cru sobrou
+
+
+# ---------- S18a: blindagem POR TOKEN (uma falha não contamina o resto) ----------
+def test_blindagem_por_token_nao_contamina_a_frase(monkeypatch):
+    # Um valor que faz _cardinal explodir cai pro cru SOZINHO; o resto da frase é normalizado.
+    # (No código antigo, o try/except GLOBAL derrubaria a frase inteira — efeito-dominó.)
+    import app.voice.fala as fala
+
+    real = fala._cardinal
+
+    def parcial(n, fem=False):
+        if n == 5800:  # valor arredondado de R$ 5.791,80
+            raise RuntimeError("boom só nesse token")
+        return real(n, fem)
+
+    monkeypatch.setattr(fala, "_cardinal", parcial)
+    out = para_fala("R$ 5.791,80 e 200 peças em 28/06/2026")
+    assert "R$ 5.791,80" in out  # token que falhou: fica cru
+    assert "duzentas peças" in out  # OUTRO token: convertido, não contaminado
+    assert "vinte e oito de junho de 2026" in out  # data: convertida
+
+
+# ---------- S18a: filtro de códigos não-vocalizáveis (SÓ no áudio) ----------
+def test_filtra_codigo_de_rastreio():
+    out = para_fala("Seu rastreio é BR600030001BR, certo?")
+    assert "BR600030001BR" not in out
+    assert "rastreio está na mensagem escrita" in out
+
+
+def test_filtra_linha_digitavel():
+    linha = "47690.00001 02603.247503 00000.000017 8 95670000260324"
+    out = para_fala(f"A linha digitável é {linha}.")
+    assert "47690" not in out and "260324" not in out
+    assert "linha digitável está na mensagem escrita" in out
+
+
+def test_filtra_chave_de_acesso_44_digitos():
+    chave = "3" * 44
+    out = para_fala(f"A chave de acesso é {chave}.")
+    assert chave not in out
+    assert "chave de acesso está na mensagem escrita" in out
+
+
+def test_codigos_nao_sobram_como_digitos_no_audio():
+    import re as _re
+
+    out = para_fala("rastreio BR600030001BR e chave " + "1" * 44)
+    assert not _re.search(r"\d", out)  # nenhum dígito dos códigos vaza pra fala
+
+
+def test_refid_curto_nao_e_confundido_com_codigo():
+    # RefId de 9 dígitos NÃO é código longo: segue dígito a dígito (não vira a frase curta).
+    assert para_fala("340103413") == "três quatro zero um zero três quatro um três"
+
+
+def test_audio_only_a_tela_mantem_o_codigo():
+    # para_fala é a transformação SÓ do áudio (router:252). A string original — o que a TELA
+    # mostra (router:248, resposta crua) — não é mutada: o código completo permanece nela.
+    tela = "Seu rastreio é BR600030001BR."
+    audio = para_fala(tela)
+    assert "BR600030001BR" in tela and "BR600030001BR" not in audio
+
+
+def test_determinismo_mesmo_input_mesma_saida():
+    entrada = "Pedido 4477, R$ 1.282.540,70, rastreio BR600030001BR, em 07/05/2026."
+    assert para_fala(entrada) == para_fala(entrada)
