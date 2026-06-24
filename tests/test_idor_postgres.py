@@ -104,3 +104,46 @@ def test_cancelamento_proprio_registra(repo):
     assert sol.cliente_id == 1
     assert sol.tipo.value == "cancelamento"
     repo.session.rollback()
+
+
+# ---------- S13: IDOR cross-client das entidades fiscais (read-only) ----------
+# Seed S12: cliente 1 dono de NF 60001-60005, títulos 70001-70015, devoluções 80001-80003;
+# cliente 2 dono de NF 60006, título 70016, devolução 80004.
+def test_idor_nota_fiscal_de_outro_cliente_none(repo):
+    assert repo.consultar_nota_fiscal(cliente_id=2, numero_nf=60001) is None  # 60001 é do cliente 1
+
+
+def test_idor_titulo_de_outro_cliente_none(repo):
+    assert repo.consultar_titulo(cliente_id=2, numero_titulo="70001") is None
+
+
+def test_idor_devolucao_de_outro_cliente_none(repo):
+    assert repo.consultar_devolucao(cliente_id=2, numero_devolucao="80001") is None
+
+
+def test_idor_cliente1_nao_ve_nf_do_cliente2(repo):
+    assert repo.consultar_nota_fiscal(cliente_id=1, numero_nf=60006) is None  # 60006 é do cliente 2
+
+
+def test_idor_listagens_fiscais_nao_vazam_entre_clientes(repo):
+    nfs2 = {n.numero_nf for n in repo.listar_notas_fiscais(2)}
+    assert 60006 in nfs2
+    assert nfs2.isdisjoint({60001, 60002, 60003, 60004, 60005})
+    tit2 = {t.numero_titulo for t in repo.listar_titulos(2)}
+    assert "70016" in tit2
+    assert tit2.isdisjoint({str(n) for n in range(70001, 70016)})  # nenhum título do cliente 1
+    dev2 = {d.numero_devolucao for d in repo.listar_devolucoes(2)}
+    assert dev2 == {"80004"}
+    # e o cliente 1 NÃO vê nada do cliente 2
+    assert 60006 not in {n.numero_nf for n in repo.listar_notas_fiscais(1)}
+    assert "70016" not in {t.numero_titulo for t in repo.listar_titulos(1)}
+
+
+def test_idor_faturamento_escopado_ao_cliente(repo):
+    f2 = repo.consultar_faturamento(cliente_id=2)
+    # cliente 2: 2 pedidos (4450, 4451); só 4450 tem NF (60006). Nada do cliente 1 entra.
+    assert f2["pedidos_total"] == 2
+    assert f2["pedidos_faturados"] == 1
+    assert f2["pedidos_a_faturar"] == 1
+    ped4450 = repo.consultar_pedido(2, 4450)
+    assert f2["valor_faturado"] == ped4450.valor_total  # só o pedido faturado do cliente 2

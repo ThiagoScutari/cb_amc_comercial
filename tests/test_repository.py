@@ -13,9 +13,12 @@ from app.data.models import (
     Solicitacao,
     StatusPedido,
     StatusSolicitacao,
+    StatusTitulo,
     TipoSolicitacao,
     parse_ref_produto,
 )
+from app.data.repository import MockRepository
+from app.data.seed import DEMO_CLIENTE_ID, popular
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
@@ -238,3 +241,85 @@ def test_solicitacao_status_pendente_default(session):
     assert s.status is StatusSolicitacao.pendente
     assert s.criado_em is not None
     assert s.payload["motivo"] == "desistência"
+
+
+# --------- S13: consultas read-only de NF / título / devolução + faturamento (SQLite) ---------
+@pytest.fixture
+def repo(session) -> MockRepository:
+    popular(session)
+    session.flush()
+    return MockRepository(session)
+
+
+def test_consultar_nota_fiscal_propria(repo):
+    nf = repo.consultar_nota_fiscal(DEMO_CLIENTE_ID, 60001)
+    assert nf is not None
+    assert nf.numero_nf == 60001 and nf.cliente_id == DEMO_CLIENTE_ID
+
+
+def test_consultar_nota_fiscal_inexistente_none(repo):
+    assert repo.consultar_nota_fiscal(DEMO_CLIENTE_ID, 99999) is None
+
+
+def test_consultar_titulo_proprio(repo):
+    t = repo.consultar_titulo(DEMO_CLIENTE_ID, "70001")
+    assert t is not None and t.numero_titulo == "70001"
+
+
+def test_consultar_devolucao_propria(repo):
+    d = repo.consultar_devolucao(DEMO_CLIENTE_ID, "80001")
+    assert d is not None and d.numero_devolucao == "80001"
+
+
+def test_listar_notas_fiscais_ordenado_e_so_do_cliente(repo):
+    nfs = repo.listar_notas_fiscais(DEMO_CLIENTE_ID)
+    nums = [n.numero_nf for n in nfs]
+    assert nums == [60001, 60002, 60003, 60004, 60005]  # ordem estável por numero_nf
+    assert all(n.cliente_id == DEMO_CLIENTE_ID for n in nfs)
+
+
+def test_listar_titulos_ordenado_e_filtro_status(repo):
+    todos = repo.listar_titulos(DEMO_CLIENTE_ID)
+    assert len(todos) == 15  # 5 NFs x 3 parcelas (condição "28/35/42 dias")
+    vencs = [t.data_vencimento for t in todos]
+    assert vencs == sorted(vencs)  # ordenação estável por data_vencimento
+    pagos = repo.listar_titulos(DEMO_CLIENTE_ID, filtro_status=StatusTitulo.pago)
+    assert len(pagos) == 1 and pagos[0].status == StatusTitulo.pago
+    vencidos = repo.listar_titulos(DEMO_CLIENTE_ID, filtro_status=StatusTitulo.vencido)
+    assert vencidos and all(t.status == StatusTitulo.vencido for t in vencidos)
+
+
+def test_listar_devolucoes_ordenado(repo):
+    devs = repo.listar_devolucoes(DEMO_CLIENTE_ID)
+    assert {d.numero_devolucao for d in devs} == {"80001", "80002", "80003"}
+    datas = [d.data_solicitacao for d in devs]
+    assert datas == sorted(datas)  # ordem estável por data_solicitacao
+
+
+def test_consultar_faturamento_demo_bate_o_seed(repo):
+    f = repo.consultar_faturamento(DEMO_CLIENTE_ID)
+    # contagens fixadas (S12: NFs 60001-60005 -> pedidos 4473..4477)
+    assert f["pedidos_total"] == 9
+    assert f["pedidos_faturados"] == 5
+    assert f["pedidos_a_faturar"] == 4
+    # valores: confere com a soma independente dos pedidos COM/SEM NF
+    faturados = {4473, 4474, 4475, 4476, 4477}
+    peds = repo.session.scalars(select(Pedido).where(Pedido.cliente_id == DEMO_CLIENTE_ID)).all()
+    esperado_fat = sum((p.valor_total for p in peds if p.id in faturados), Decimal("0"))
+    esperado_af = sum((p.valor_total for p in peds if p.id not in faturados), Decimal("0"))
+    assert f["valor_faturado"] == esperado_fat
+    assert f["valor_a_faturar"] == esperado_af
+    # partição exata: faturado + a_faturar == total do cliente
+    assert f["valor_faturado"] + f["valor_a_faturar"] == sum(
+        (p.valor_total for p in peds), Decimal("0")
+    )
+    assert isinstance(f["valor_faturado"], Decimal)
+
+
+def test_consultar_faturamento_cliente_sem_nf(repo):
+    # clientes 3..10 têm pedidos mas NENHUMA NF (S12 só semeia NF p/ clientes 1 e 2)
+    f = repo.consultar_faturamento(3)
+    assert f["pedidos_total"] >= 1
+    assert f["pedidos_faturados"] == 0
+    assert f["valor_faturado"] == Decimal("0")
+    assert f["pedidos_a_faturar"] == f["pedidos_total"]

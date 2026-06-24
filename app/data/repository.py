@@ -13,6 +13,7 @@ de propósito (ver produto de outrem não é vazamento). Itens só são alcanç�
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import Protocol
 
 from sqlalchemy import or_, select
@@ -20,12 +21,16 @@ from sqlalchemy.orm import Session
 
 from app.data.models import (
     Cliente,
+    Devolucao,
     Estoque,
+    NotaFiscal,
     Pedido,
     Produto,
     Solicitacao,
     StatusPedido,
+    StatusTitulo,
     TipoSolicitacao,
+    Titulo,
 )
 
 
@@ -63,6 +68,17 @@ class DadosRepository(Protocol):
     ) -> list[Pedido]: ...
     def listar_solicitacoes(self, cliente_id: int) -> list[Solicitacao]: ...
     def dados_cliente(self, cliente_id: int) -> Cliente | None: ...
+
+    # --- DADOS FISCAIS / FINANCEIROS (S13, read-only): cliente_id 1º param obrigatório ---
+    def consultar_nota_fiscal(self, cliente_id: int, numero_nf: int) -> NotaFiscal | None: ...
+    def consultar_titulo(self, cliente_id: int, numero_titulo: str) -> Titulo | None: ...
+    def consultar_devolucao(self, cliente_id: int, numero_devolucao: str) -> Devolucao | None: ...
+    def listar_notas_fiscais(self, cliente_id: int) -> list[NotaFiscal]: ...
+    def listar_titulos(
+        self, cliente_id: int, filtro_status: StatusTitulo | None = None
+    ) -> list[Titulo]: ...
+    def listar_devolucoes(self, cliente_id: int) -> list[Devolucao]: ...
+    def consultar_faturamento(self, cliente_id: int) -> dict: ...
 
     # --- ESCRITA (intake): só REGISTRA, NÃO muta pedido/estoque ---
     def registrar_cancelamento(
@@ -155,6 +171,87 @@ class MockRepository:
         # Filtra pelo cliente_id da sessão: estruturalmente impossível ler outro cliente
         # (o tool não tem parâmetro; o id vem do código — anti-IDOR, §2.3).
         return self.session.scalars(select(Cliente).where(Cliente.id == cliente_id)).one_or_none()
+
+    # --- DADOS FISCAIS / FINANCEIROS (S13): read-only, filtra DIRETO pela coluna cliente_id ---
+    def consultar_nota_fiscal(self, cliente_id: int, numero_nf: int) -> NotaFiscal | None:
+        # NF carrega cliente_id próprio (S11): filtro DIRETO, igual a consultar_pedido.
+        # Não pertence (ou inexiste) -> None (idêntico; não vaza existência).
+        return self.session.scalars(
+            select(NotaFiscal).where(
+                NotaFiscal.numero_nf == numero_nf,
+                NotaFiscal.cliente_id == cliente_id,
+            )
+        ).one_or_none()
+
+    def consultar_titulo(self, cliente_id: int, numero_titulo: str) -> Titulo | None:
+        return self.session.scalars(
+            select(Titulo).where(
+                Titulo.numero_titulo == numero_titulo,
+                Titulo.cliente_id == cliente_id,
+            )
+        ).one_or_none()
+
+    def consultar_devolucao(self, cliente_id: int, numero_devolucao: str) -> Devolucao | None:
+        return self.session.scalars(
+            select(Devolucao).where(
+                Devolucao.numero_devolucao == numero_devolucao,
+                Devolucao.cliente_id == cliente_id,
+            )
+        ).one_or_none()
+
+    def listar_notas_fiscais(self, cliente_id: int) -> list[NotaFiscal]:
+        return list(
+            self.session.scalars(
+                select(NotaFiscal)
+                .where(NotaFiscal.cliente_id == cliente_id)
+                .order_by(NotaFiscal.numero_nf)  # ordem estável (determinismo de saída)
+            ).all()
+        )
+
+    def listar_titulos(
+        self, cliente_id: int, filtro_status: StatusTitulo | None = None
+    ) -> list[Titulo]:
+        # Espelha listar_pedidos: filtro opcional por status, sempre filtrado por cliente_id.
+        stmt = (
+            select(Titulo)
+            .where(Titulo.cliente_id == cliente_id)
+            .order_by(Titulo.data_vencimento, Titulo.numero_titulo)
+        )
+        if filtro_status is not None:
+            stmt = stmt.where(Titulo.status == filtro_status)
+        return list(self.session.scalars(stmt).all())
+
+    def listar_devolucoes(self, cliente_id: int) -> list[Devolucao]:
+        return list(
+            self.session.scalars(
+                select(Devolucao)
+                .where(Devolucao.cliente_id == cliente_id)
+                .order_by(Devolucao.data_solicitacao, Devolucao.numero_devolucao)
+            ).all()
+        )
+
+    def consultar_faturamento(self, cliente_id: int) -> dict:
+        """Agregado read-only: quantos pedidos do cliente viraram NF (e quanto em R$).
+
+        "Tem NF" = existe NotaFiscal com aquele pedido_id E o MESMO cliente_id. Carrega
+        só os pedidos do PRÓPRIO cliente (escopo pequeno) + os pedido_id com NF — soma
+        exata em Decimal, sem varrer o banco inteiro. Tudo filtrado por cliente_id.
+        """
+        pedidos = self.session.scalars(select(Pedido).where(Pedido.cliente_id == cliente_id)).all()
+        com_nf = set(
+            self.session.scalars(
+                select(NotaFiscal.pedido_id).where(NotaFiscal.cliente_id == cliente_id)
+            ).all()
+        )
+        faturados = [p for p in pedidos if p.id in com_nf]
+        a_faturar = [p for p in pedidos if p.id not in com_nf]
+        return {
+            "pedidos_total": len(pedidos),
+            "pedidos_faturados": len(faturados),
+            "pedidos_a_faturar": len(a_faturar),
+            "valor_faturado": sum((p.valor_total for p in faturados), Decimal("0")),
+            "valor_a_faturar": sum((p.valor_total for p in a_faturar), Decimal("0")),
+        }
 
     def cliente_por_telefone(self, telefone: str) -> Cliente | None:
         # NÃO decide política: retorna Cliente|None. A decisão sobre None (escalar
