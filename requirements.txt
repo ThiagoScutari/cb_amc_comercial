@@ -11,8 +11,8 @@ sqlalchemy==2.0.36
 psycopg[binary]==3.2.3          # driver Postgres (psycopg3, uso síncrono)
 httpx==0.28.1
 jinja2==3.1.6           # 3.1.4 tinha CVE-2024-56326/56201/2025-27516 (pip-audit) — bump p/ 3.1.6
-weasyprint==62.3        # HTML->PDF do relatório visual (S18c); EXIGE libs de sistema (ver Dockerfile)
-pydyf==0.10.0           # backend PDF do WeasyPrint 62.3; PINADO — 0.11+ mudou transform() e quebra o 62.3
+weasyprint==68.0        # HTML->PDF do relatório (S18c); >=68.0 corrige GHSA-983w-rhvv-gwmv. EXIGE libs de sistema (Dockerfile)
+pydyf==0.12.1           # backend PDF do WeasyPrint 68.0 (par compatível; o 68.0 usa a API nova do pydyf)
 
 # Itens adiados (entram na fase correspondente, p/ evitar peso/CVE prematuro):
 #   python-multipart  -> Fase 8 (upload no webhook Evolution)
