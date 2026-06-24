@@ -18,15 +18,16 @@ nem formulários.
   respondido na hora, como numa conversa normal.
 - **Entende linguagem natural — por escrito ou por voz.** O cliente pode digitar ou
   **mandar uma mensagem de voz**; o assistente entende as duas formas.
-- **Responde por voz quando o cliente fala por voz.** O texto sai sempre; **se a pergunta
-  veio em áudio, a resposta também volta em áudio** (espelho de canal), para uma conversa
-  mais natural.
+- **Responde no mesmo canal da pergunta.** Quem **escreve** recebe **texto**; quem manda
+  **áudio** recebe a resposta como **nota de voz inline** (sem repetir o texto longo). Se a
+  voz falhar, cai de volta para texto — o bot nunca fica mudo.
 - **Consulta pedidos, estoque e catálogo.** Status e prazo de um pedido, se um produto
   está disponível para comprar, e busca no catálogo (*"tem camiseta branca M?"*).
 - **Informa a condição de pagamento da conta.** Responde *"qual a minha condição de
   pagamento?"* com os dados comerciais da própria conta.
-- **Monta um resumo visual dos pedidos.** A pedido (*"meus pedidos"*), além da resposta em
-  texto, envia um resumo em HTML que abre estilizado no navegador do celular.
+- **Monta um resumo visual em PDF.** A pedido (*"meus pedidos"*, *"minhas notas"*, *"meus
+  boletos"*, *"minhas devoluções"*), além da resposta, envia um **documento PDF** com a lista
+  — pedidos, notas fiscais, títulos ou devoluções.
 - **Não deixa o cliente no vácuo.** Quando a consulta demora um pouco, ele avisa
   *"só um instante, já estou verificando"* antes de trazer a resposta.
 - **Cada cliente vê só os próprios dados.** Uma conta nunca enxerga pedidos ou
@@ -50,8 +51,9 @@ O cliente fala pelo WhatsApp; a mensagem chega ao nosso serviço pela **API ofic
 WhatsApp (Meta)**. Se for áudio, ele é **transcrito** para texto; um modelo de
 linguagem **(Claude)** interpreta o pedido e, quando precisa de um dado real (pedido,
 prazo, estoque), o **código** — não o modelo — consulta a base e devolve o fato. A
-resposta volta em texto; **se a mensagem do cliente veio em áudio**, o texto também é
-convertido em **voz** e enviado como nota de áudio.
+resposta volta **pelo mesmo canal da pergunta**: quem escreveu recebe texto, quem mandou
+áudio recebe uma **nota de voz**. Quando há um resumo visual, um **PDF** acompanha a
+resposta nos dois casos.
 
 ![Arquitetura](docs/img/arquitetura.png)
 
@@ -88,6 +90,12 @@ não altera nada no sistema da AMC.
 ### Desenvolvimento local
 
 Requer Python 3.12+.
+
+> **Dependência de sistema (relatório PDF):** o WeasyPrint exige libs nativas (Pango, Cairo,
+> GDK-PixBuf). No container elas já vão no `Dockerfile`; rodando **fora** do container,
+> instale-as pelo SO — no Debian/Ubuntu: `libpango-1.0-0 libpangocairo-1.0-0 libcairo2
+> libgdk-pixbuf-2.0-0 libffi8`. Sem elas, a geração do PDF falha (mas degrada: o texto/áudio
+> sai do mesmo jeito).
 
 ```bash
 python -m venv .venv && . .venv/Scripts/activate   # Windows: .venv\Scripts\Activate.ps1
@@ -127,13 +135,20 @@ de subir. O `DATABASE_URL` usa o nome do container (`cb_amc_comercial_db`), nunc
 `localhost`. Rode com **`--workers 1`** — o histórico de conversa do MVP é em memória
 (ver `spec.md` / `app/agent/orchestrator.py`).
 
-Depois de subir, popular o banco e (opcional) cadastrar um cliente-demo — `scripts/` já
-vai na imagem:
+Depois de subir, popular o banco e (opcional) cadastrar um cliente-demo extra — `scripts/`
+já vai na imagem:
 
 ```bash
 docker compose exec app python -m app.data.seed
 docker compose exec app python -m scripts.cadastrar_demo --telefone "5547999998888" --nome "Boutique do João"
 ```
+
+O **seed** cria os **3 clientes-demo** (`{1,2,3}` — Boutique Aurora, Maré Alta, Debora Modas)
+com pedidos, estoque e **fiscal** (notas fiscais, títulos, devoluções). Os telefones desses
+clientes vêm de **`DEMO_PHONE_1/2/3`** no `.env`: na VPS, os números **reais** de WhatsApp; em
+dev/CI, deixe **em branco** e o seed usa defaults fictícios determinísticos (os testes assumem
+esses defaults). O `cadastrar_demo` cria um cliente extra sob demanda — **também com fiscal**,
+em faixa de numeração própria que não colide com o seed.
 
 ### Deploy na VPS (Traefik)
 
@@ -145,6 +160,10 @@ Na VPS, app e banco entram na rede Docker **externa** do Traefik
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.vps.yml up -d --build
 ```
+
+> **Pós-S18c:** o `--build` reconstrói a imagem instalando as **libs de sistema do WeasyPrint**
+> (Pango/Cairo/…) — a primeira build após essa mudança é mais pesada; as seguintes usam cache.
+> Reaplique o seed só se o schema/dados mudaram (`docker compose exec app python -m app.data.seed`).
 
 O `docker-compose.yml` base é **dev-safe** (sem rede externa), então `docker compose up`
 local continua funcionando. O overlay **não** é um `docker-compose.override.yml` de
@@ -193,11 +212,12 @@ Variáveis relevantes no `.env` (template em `.env.example`):
 - [ ] webhook verificado na Meta (GET com o `WHATSAPP_VERIFY_TOKEN` retorna o challenge)
 - [ ] WABA inscrita no app (`subscribed_apps`) — mensagens chegando no `POST /webhook/whatsapp`
 - [ ] enviar/receber **texto** num WhatsApp real (ida e volta)
-- [ ] enviar **áudio**: a mensagem de voz é transcrita e o bot **responde com áudio**
-- [ ] `DEMO_PHONE` (em `app/data/seed.py`) trocado pelo número real do cliente-demo
-- [ ] **resumo visual:** mandar "meus pedidos" e confirmar que chega o documento
-      `Resumo de Pedidos.html` e abre estilizado no navegador do celular — é aditivo: se
-      falhar, a resposta em texto (lista de pedidos) sai do mesmo jeito
+- [ ] enviar **áudio**: a voz é transcrita e o bot responde como **nota de voz inline**
+      (não um arquivo para baixar) — e o texto longo **não** acompanha o áudio
+- [ ] `DEMO_PHONE_1/2/3` no `.env` trocados pelos números reais dos 3 clientes-demo
+- [ ] **resumo visual:** mandar "meus pedidos" (ou "minhas notas"/"meus boletos"/"minhas
+      devoluções") e confirmar que chega o **PDF** da lista — é aditivo: se falhar, a
+      resposta (texto ou áudio) sai do mesmo jeito
 - [ ] domínio próprio + SSL válido (Traefik) ativos em `bot.thiagoscutari.com.br`
 
 ### Estrutura
@@ -209,7 +229,7 @@ Variáveis relevantes no `.env` (template em `.env.example`):
 │   ├── auth/           # telefone -> cliente_id (fail-closed)
 │   ├── data/           # models, repository (filtro por cliente_id), seed, catálogo
 │   ├── ops/            # escalonamento (fallback humano)
-│   ├── report/         # resumo visual de pedidos em HTML (aditivo)
+│   ├── report/         # resumo visual em PDF — pedidos/NF/título/devolução (WeasyPrint, aditivo)
 │   ├── voice/          # stt.py (Whisper) · tts.py (ElevenLabs) · fala.py (texto falável)
 │   ├── whatsapp/       # client.py (Cloud API) · router.py (webhook+dispatcher) · factory.py
 │   ├── config.py       # Pydantic Settings (segredos só no .env)
