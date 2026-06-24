@@ -122,3 +122,43 @@ def test_renderer_so_pinta_a_lista_recebida(repo):
     assert nfs_2  # sanidade: cliente 2 tem NF no seed
     for nf in nfs_2:
         assert str(nf.numero_nf) not in html_1  # nenhuma NF do cliente 2 no HTML do cliente 1
+
+
+# ---------- S18c: HTML -> PDF (a Cloud API rejeita text/html como documento) ----------
+# WeasyPrint exige libs nativas (Pango/Cairo) — ausentes no dev Windows. Estes testes pulam
+# onde o WeasyPrint não importa e RODAM no container/CI (onde o Dockerfile instala as libs).
+def test_html_para_pdf_gera_pdf_valido(repo):
+    pytest.importorskip("weasyprint")
+    from app.report.pdf import html_para_pdf
+
+    for html in (
+        gerar_html_pedidos("Boutique Aurora", repo.listar_pedidos(1)),
+        gerar_html_notas("Boutique Aurora", repo.listar_notas_fiscais(1)),
+        gerar_html_titulos("Boutique Aurora", repo.listar_titulos(1)),
+        gerar_html_devolucoes("Boutique Aurora", repo.listar_devolucoes(1)),
+    ):
+        pdf = html_para_pdf(html)
+        assert pdf[:5] == b"%PDF-"  # magic de PDF
+        assert len(pdf) > 500  # não-vazio / página renderizada de verdade
+
+
+def test_html_para_pdf_de_lista_vazia_tambem_renderiza():
+    pytest.importorskip("weasyprint")
+    from app.report.pdf import html_para_pdf
+
+    pdf = html_para_pdf(gerar_html_notas("Loja Vazia", []))
+    assert pdf[:5] == b"%PDF-"
+
+
+def test_pdf_nao_reintroduz_xss(repo):
+    # Anti-XSS herdado: o HTML já vem ESCAPADO (autoescape, testado acima). O WeasyPrint
+    # renderiza um documento — não executa <script>. O PDF é derivado do HTML escapado, sem
+    # reintroduzir a tag executável.
+    pytest.importorskip("weasyprint")
+    from app.report.pdf import html_para_pdf
+
+    devs = repo.listar_devolucoes(1)
+    devs[0].motivo = "<script>alert('x')</script>"
+    html = gerar_html_devolucoes("Loja", devs)
+    assert "<script>alert" not in html and "&lt;script&gt;" in html  # já escapado no HTML
+    assert html_para_pdf(html)[:5] == b"%PDF-"  # renderiza sem reintroduzir a tag

@@ -7,6 +7,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# Libs de SISTEMA do WeasyPrint (Pango/Cairo/GDK-PixBuf/ffi + fontes-base). O pip sozinho NÃO
+# basta: sem estas o render do PDF quebra em runtime. --no-install-recommends + limpeza das
+# listas do apt p/ manter a imagem enxuta.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpango-1.0-0 \
+        libpangocairo-1.0-0 \
+        libpangoft2-1.0-0 \
+        libcairo2 \
+        libgdk-pixbuf-2.0-0 \
+        libffi8 \
+        shared-mime-info \
+        fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 # Instala dependências primeiro (cache de camada).
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

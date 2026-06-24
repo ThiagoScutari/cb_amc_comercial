@@ -46,6 +46,7 @@ from app.auth.session import SessaoNegada, resolver_sessao
 from app.config import Settings, get_settings
 from app.data.repository import MockRepository
 from app.ops.escalation import registrar_escalonamento
+from app.report.pdf import html_para_pdf
 from app.report.resumo_pedidos import (
     gerar_html_devolucoes,
     gerar_html_notas,
@@ -283,45 +284,51 @@ class Dispatcher:
             await task
 
     async def _enviar_resumo_html(self, telefone, repo, cliente_id: int, nome: str | None) -> None:
-        """Gera e envia o resumo visual (HTML/documento). ADITIVO e best-effort: todo o
-        corpo é envolto em try/except — falha de geração ou de envio NÃO derruba o fluxo
-        (o texto já saiu). anti-IDOR: listar_pedidos filtra pelo cliente_id da sessão."""
+        """Gera e envia o resumo visual em PDF (a Cloud API rejeita HTML como documento, 400).
+        ADITIVO e best-effort: todo o corpo é envolto em try/except — falha de geração, de
+        renderização do PDF ou de envio NÃO derruba o fluxo (o texto já saiu). anti-IDOR:
+        listar_pedidos filtra pelo cliente_id da sessão."""
         try:
             pedidos = repo.listar_pedidos(cliente_id)  # só os pedidos deste cliente
-            html = gerar_html_pedidos(nome or "Cliente", pedidos)
+            pdf = html_para_pdf(gerar_html_pedidos(nome or "Cliente", pedidos))
             await self.client.enviar_documento(
                 telefone,
-                html.encode("utf-8"),
-                filename="Resumo de Pedidos.html",
+                pdf,
+                filename="pedidos.pdf",
+                mimetype="application/pdf",
                 caption="Aqui está o resumo dos seus pedidos.",
             )
-        except Exception as exc:  # noqa: BLE001 - ADITIVO: o HTML nunca pode derrubar o fluxo (§15)
-            logger.warning("resumo HTML falhou (aditivo, ignorado): %s", str(exc)[:120])
+        except Exception as exc:  # noqa: BLE001 - ADITIVO: o PDF nunca pode derrubar o fluxo (§15)
+            logger.warning("resumo PDF falhou (aditivo, ignorado): %s", str(exc)[:120])
 
     async def _enviar_lista_html(
         self, telefone, repo, cliente_id: int, nome: str | None, entidade: str
     ) -> None:
-        """Lista visual de NF/título/devolução em HTML. ADITIVO e best-effort, igual ao
-        resumo de pedidos: try/except amplo (HTML falhou, a conversa segue). Anti-IDOR: os
-        `listar_*` filtram pelo cliente_id da sessão; o renderer só pinta a lista recebida."""
+        """Lista visual de NF/título/devolução em PDF. ADITIVO e best-effort, igual ao resumo
+        de pedidos: try/except amplo (geração/render/envio falhou, a conversa segue). Anti-IDOR:
+        os `listar_*` filtram pelo cliente_id da sessão; o renderer só pinta a lista recebida."""
         nome = nome or "Cliente"
         try:
             if entidade == "notas":
                 html = gerar_html_notas(nome, repo.listar_notas_fiscais(cliente_id))
-                filename, caption = "Notas Fiscais.html", "Aqui estão as suas notas fiscais."
+                filename, caption = "notas_fiscais.pdf", "Aqui estão as suas notas fiscais."
             elif entidade == "titulos":
                 html = gerar_html_titulos(nome, repo.listar_titulos(cliente_id))
-                filename, caption = "Titulos.html", "Aqui estão os seus títulos."
+                filename, caption = "titulos.pdf", "Aqui estão os seus títulos."
             elif entidade == "devolucoes":
                 html = gerar_html_devolucoes(nome, repo.listar_devolucoes(cliente_id))
-                filename, caption = "Devolucoes.html", "Aqui estão as suas devoluções."
+                filename, caption = "devolucoes.pdf", "Aqui estão as suas devoluções."
             else:
                 return
             await self.client.enviar_documento(
-                telefone, html.encode("utf-8"), filename=filename, caption=caption
+                telefone,
+                html_para_pdf(html),
+                filename=filename,
+                mimetype="application/pdf",
+                caption=caption,
             )
-        except Exception as exc:  # noqa: BLE001 - ADITIVO: o HTML nunca pode derrubar o fluxo (§15)
-            logger.warning("lista HTML falhou (aditivo, ignorado): %s", str(exc)[:120])
+        except Exception as exc:  # noqa: BLE001 - ADITIVO: o PDF nunca pode derrubar o fluxo (§15)
+            logger.warning("lista PDF falhou (aditivo, ignorado): %s", str(exc)[:120])
 
     async def aclose(self) -> None:
         fechar = getattr(self.client, "aclose", None)

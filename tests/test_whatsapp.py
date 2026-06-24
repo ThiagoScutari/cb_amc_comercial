@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 
 import httpx
+import pytest
 from app.config import Settings
 from app.whatsapp.client import WhatsAppCloudClient
 from app.whatsapp.router import _MSG_ACK, Dispatcher, criar_router, extrair_mensagem
@@ -35,7 +36,8 @@ class FakeWhatsAppClient:
     def __init__(self, audio_in: bytes | None = b"ogg-bytes"):
         self.textos: list[tuple[str, str]] = []
         self.audios: list[tuple[str, bytes]] = []
-        self.documentos: list[tuple[str, bytes, str]] = []
+        # (telefone, conteudo, filename, mimetype)
+        self.documentos: list[tuple[str, bytes, str, str]] = []
         self.falha_documento = False  # True -> enviar_documento levanta (simula Meta fora)
         self.buscou = 0
         self._audio_in = audio_in
@@ -53,7 +55,7 @@ class FakeWhatsAppClient:
     ):
         if self.falha_documento:
             raise RuntimeError("cloud api media caiu")
-        self.documentos.append((telefone, conteudo, filename))
+        self.documentos.append((telefone, conteudo, filename, mimetype))
         return True
 
     async def buscar_audio(self, mensagem):
@@ -303,7 +305,18 @@ async def test_audio_fala_por_extenso_texto_continua_formatado():
     assert tts.textos == ["Seu pedido tem duzentas peças."]  # áudio: derivado, por extenso
 
 
-# ---------- resumo visual em HTML (aditivo) ----------
+# ---------- resumo visual em PDF (aditivo) ----------
+@pytest.fixture(autouse=True)
+def _stub_html_para_pdf(monkeypatch):
+    """WeasyPrint exige libs nativas (ausentes no dev Windows); o render real é validado no
+    container. Aqui stubamos `html_para_pdf` p/ testar o ROTEAMENTO (mimetype/filename/best-
+    effort) sem depender das libs — devolve um PDF mínimo (magic %PDF + um trecho do HTML)."""
+    monkeypatch.setattr(
+        "app.whatsapp.router.html_para_pdf",
+        lambda html: b"%PDF-1.7\n" + html.encode("utf-8")[:48],
+    )
+
+
 def test_quer_resumo_visual_casa_frases_de_resumo():
     from app.whatsapp.router import _quer_resumo_visual
 
@@ -329,10 +342,10 @@ async def test_gatilho_resumo_envia_documento_alem_do_texto():
     disp, client, orq, stt, tts = _make()
     await disp.processar(_texto_payload("meus pedidos"))
     assert len(client.textos) == 1  # TEXTO sempre (a garantia)
-    assert len(client.documentos) == 1  # + documento HTML (aditivo)
-    tel, conteudo, fname = client.documentos[0]
-    assert tel == _TEL and fname.endswith(".html")
-    assert b"<!DOCTYPE html>" in conteudo  # é o HTML gerado de verdade
+    assert len(client.documentos) == 1  # + documento PDF (aditivo)
+    tel, conteudo, fname, mime = client.documentos[0]
+    assert tel == _TEL and fname.endswith(".pdf") and mime == "application/pdf"
+    assert conteudo.startswith(b"%PDF")  # documento é PDF (Cloud API rejeita HTML)
 
 
 async def test_sem_gatilho_nao_envia_documento():
@@ -343,12 +356,24 @@ async def test_sem_gatilho_nao_envia_documento():
 
 
 async def test_documento_que_falha_nao_quebra_o_texto():
-    # ADITIVO: se o envio do HTML lança, o texto JÁ saiu e nada quebra (try/except amplo).
+    # ADITIVO: se o envio do documento lança, o texto JÁ saiu e nada quebra (try/except amplo).
     disp, client, orq, stt, tts = _make()
     client.falha_documento = True
     await disp.processar(_texto_payload("meus pedidos"))
-    assert len(client.textos) == 1  # texto entregue mesmo com o HTML falhando
+    assert len(client.textos) == 1  # texto entregue mesmo com o envio falhando
     assert len(client.documentos) == 0  # nada registrado (falhou e foi engolido)
+
+
+async def test_pdf_que_falha_na_renderizacao_nao_quebra_o_texto(monkeypatch):
+    # Se html_para_pdf lança (libs/render quebrados), o texto JÁ saiu e nada cai (best-effort).
+    def _boom(_html):
+        raise RuntimeError("weasyprint quebrou")
+
+    monkeypatch.setattr("app.whatsapp.router.html_para_pdf", _boom)
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("meus pedidos"))
+    assert len(client.textos) == 1  # texto entregue
+    assert len(client.documentos) == 0  # render do PDF falhou e foi engolido
 
 
 # ---------- S16: listas visuais de NF / título / devolução (aditivo) ----------
@@ -370,27 +395,28 @@ async def test_gatilho_notas_envia_documento():
     disp, client, orq, stt, tts = _make()
     await disp.processar(_texto_payload("me manda minhas notas fiscais"))
     assert len(client.textos) == 1
-    tel, conteudo, fname = client.documentos[0]
-    assert fname == "Notas Fiscais.html"
-    assert b"<!DOCTYPE html>" in conteudo
+    tel, conteudo, fname, mime = client.documentos[0]
+    assert fname == "notas_fiscais.pdf" and mime == "application/pdf"
+    assert conteudo.startswith(b"%PDF")
 
 
 async def test_gatilho_titulos_envia_documento():
     disp, client, orq, stt, tts = _make()
     await disp.processar(_texto_payload("quero ver meus boletos"))
-    assert client.documentos[0][2] == "Titulos.html"
+    assert client.documentos[0][2] == "titulos.pdf"
+    assert client.documentos[0][3] == "application/pdf"
 
 
 async def test_gatilho_devolucoes_envia_documento():
     disp, client, orq, stt, tts = _make()
     await disp.processar(_texto_payload("status das devoluções"))
-    assert client.documentos[0][2] == "Devolucoes.html"
+    assert client.documentos[0][2] == "devolucoes.pdf"
 
 
 async def test_meus_pedidos_ainda_cai_em_pedidos_sem_colisao():
     disp, client, orq, stt, tts = _make()
     await disp.processar(_texto_payload("meus pedidos"))
-    assert client.documentos[0][2] == "Resumo de Pedidos.html"
+    assert client.documentos[0][2] == "pedidos.pdf"
 
 
 async def test_lista_html_que_falha_nao_quebra_o_texto():

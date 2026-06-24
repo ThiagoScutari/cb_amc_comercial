@@ -36,8 +36,8 @@ _SHELL = Template(
   body { background: #060A13; color: #EAF0FA; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; padding: 12px; max-width: 100vw; overflow-x: hidden; }
   h1 { font-size: 1.1rem; color: #EAF0FA; margin-bottom: 4px; text-align: center; }
   .sub { font-size: 0.75rem; color: #7B8BA6; text-align: center; margin-bottom: 16px; }
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .card { background: #0C1220; border: 1px solid #1C2740; border-radius: 10px; padding: 14px 10px; text-align: center; overflow: hidden; word-break: break-word; }
+  .cards { text-align: center; margin-bottom: 20px; font-size: 0; }
+  .card { display: inline-block; vertical-align: top; width: 31%; min-width: 110px; margin: 6px 1%; background: #0C1220; border: 1px solid #1C2740; border-radius: 10px; padding: 14px 10px; text-align: center; overflow-wrap: break-word; }
   .card .value { font-size: 1.5rem; font-weight: 700; color: #EAF0FA; }
   .card .label { font-size: 0.7rem; color: #7B8BA6; margin-top: 4px; text-transform: uppercase; letter-spacing: 0.05em; }
   .panel { background: #0C1220; border: 1px solid #1C2740; border-radius: 10px; padding: 16px; }
