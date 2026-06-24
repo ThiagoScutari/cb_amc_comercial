@@ -15,7 +15,10 @@ O seed (Fase 1c) consome `carregar_produtos` para popular a tabela `produtos`.
 from __future__ import annotations
 
 import json
+import unicodedata
+from collections.abc import Iterable
 from decimal import Decimal, InvalidOperation
+from functools import lru_cache
 from pathlib import Path
 
 from app.data.models import Produto, parse_ref_produto
@@ -61,3 +64,67 @@ def carregar_produtos(fixture_path: str | Path = FIXTURE_PADRAO) -> list[Produto
             )
         )
     return produtos
+
+
+# ── Equivalência de gênero de cor DERIVADA DO CATÁLOGO (fix S13b: "branca" x "Branco") ──
+def _sem_acento(texto: str) -> str:
+    """Remove acentos (NFD + descarta marcas de combinação)."""
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn"
+    )
+
+
+def _norm_cor(termo: str) -> str:
+    """Normaliza um termo de cor p/ comparação: sem acento, casefold, sem bordas."""
+    return _sem_acento(termo).casefold().strip()
+
+
+def cores_do_catalogo(produtos: Iterable[Produto]) -> frozenset[str]:
+    """PALAVRAS de cor reais (normalizadas) do catálogo — o conjunto-verdade p/ validar
+    equivalências. Cores compostas ('Azul Darkness', 'Branco / Preto') são quebradas em
+    palavras; a validação de gênero então funciona por palavra, sem heurística frágil.
+    """
+    palavras: set[str] = set()
+    for p in produtos:
+        if not p.cor:
+            continue
+        for tok in p.cor.replace("/", " ").split():
+            n = _norm_cor(tok)
+            if n:
+                palavras.add(n)
+    return frozenset(palavras)
+
+
+@lru_cache(maxsize=1)
+def cores_validas() -> frozenset[str]:
+    """Conjunto de cores reais derivado do fixture (carregado UMA vez, determinístico)."""
+    return cores_do_catalogo(carregar_produtos())
+
+
+def _inverter_genero(termo_norm: str) -> str | None:
+    """Inverte a vogal final -a<->-o de UMA palavra já normalizada. Outra terminação -> None."""
+    if not termo_norm:
+        return None
+    if termo_norm[-1] == "a":
+        return termo_norm[:-1] + "o"
+    if termo_norm[-1] == "o":
+        return termo_norm[:-1] + "a"
+    return None
+
+
+def equivalente_genero_cor(termo: str, cores: frozenset[str] | None = None) -> str | None:
+    """Equivalência de gênero DERIVADA DO CATÁLOGO (anti "branca" x "Branco").
+
+    Se `termo` NÃO é cor real mas seu inverso de gênero (vogal final -a<->-o) É uma cor
+    real do catálogo, devolve o inverso NORMALIZADO; senão None. INVARIANTE: zero falso
+    positivo — um inverso que não é cor real do catálogo casa NADA. Sem stemming/radical:
+    só a inversão de gênero validada contra `cores` (default: as cores do fixture).
+    """
+    cores = cores if cores is not None else cores_validas()
+    n = _norm_cor(termo)
+    if not n or n in cores:
+        return None  # vazio, ou já casa direto: nada a acrescentar
+    inv = _inverter_genero(n)
+    if inv is not None and inv in cores:
+        return inv
+    return None

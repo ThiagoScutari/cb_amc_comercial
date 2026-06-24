@@ -7,7 +7,12 @@ Firecrawl. Casos de borda usam fixtures temporários (tmp_path).
 import json
 from decimal import Decimal
 
-from app.data.catalogo import carregar_produtos
+from app.data.catalogo import (
+    carregar_produtos,
+    cores_do_catalogo,
+    cores_validas,
+    equivalente_genero_cor,
+)
 from app.data.models import Produto, parse_ref_produto
 from sqlalchemy import select
 
@@ -110,3 +115,38 @@ def test_produtos_persistem_no_banco(session):
     session.add_all(produtos[:20])
     session.commit()
     assert len(session.scalars(select(Produto)).all()) == 20
+
+
+# --------- S13b: equivalência de gênero de cor (derivada do fixture) ---------
+def test_cores_validas_normaliza_e_quebra_compostas():
+    cores = cores_validas()
+    assert {"branco", "preto", "azul", "cinza"} <= cores
+    assert "darkness" in cores  # de "Azul Darkness" — composta quebrada em palavras
+    assert "indigo" in cores  # "Índigo" normalizado SEM acento
+    assert all(c == c.casefold() for c in cores)  # tudo normalizado
+
+
+def test_cores_do_catalogo_e_funcao_pura():
+    # opera sobre qualquer lista de produtos; compostas/`/`/acento -> palavras normalizadas.
+    ps = [Produto(cor="Branco / Preto"), Produto(cor="Índigo"), Produto(cor=None)]
+    assert cores_do_catalogo(ps) == {"branco", "preto", "indigo"}
+
+
+def test_equivalente_genero_branca_para_branco():
+    assert equivalente_genero_cor("branca") == "branco"
+    assert equivalente_genero_cor("Branca") == "branco"  # case/acento-insensível
+    assert equivalente_genero_cor("preta") == "preto"
+
+
+def test_equivalente_cor_real_direta_nao_inverte():
+    # já é cor real do catálogo: não precisa de equivalência -> None
+    assert equivalente_genero_cor("branco") is None
+    assert equivalente_genero_cor("cinza") is None  # termina em 'a' mas É cor real
+
+
+def test_equivalente_zero_falso_positivo():
+    # inverso que NÃO é cor real do catálogo -> None (sem stemming, sem chute)
+    assert equivalente_genero_cor("marinha") is None  # 'marinho' não existe no fixture
+    assert equivalente_genero_cor("rosa") is None  # 'roso' não existe
+    assert equivalente_genero_cor("bege") is None  # termina em 'e' (não a/o)
+    assert equivalente_genero_cor("") is None

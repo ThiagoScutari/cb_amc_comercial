@@ -323,3 +323,35 @@ def test_consultar_faturamento_cliente_sem_nf(repo):
     assert f["pedidos_faturados"] == 0
     assert f["valor_faturado"] == Decimal("0")
     assert f["pedidos_a_faturar"] == f["pedidos_total"]
+
+
+# --------- S13b: regressão da busca de cor tolerante a gênero (causa-raiz do E3) ---------
+def test_busca_produto_cor_branca_encontra_branco(repo):
+    # "branca" (como o cliente fala) casa "Branco" (catálogo) via equivalência de gênero.
+    achados = repo.buscar_produto("camiseta branca M")
+    assert any(p.sku == "340103413-M" for p in achados)
+
+
+def test_disponibilidade_cor_branca_retorna_saldo(repo):
+    r = repo.disponibilidade(produto="camiseta", cor="branca", tamanho="M")
+    skus_saldos = {p.sku: e.saldo for p, e in r}
+    assert skus_saldos.get("340103413-M") == 45  # saldo real da camiseta branca M
+
+
+def test_disponibilidade_cor_acento_e_case_iguais(repo):
+    base = {p.sku for p, _ in repo.disponibilidade(produto="camiseta", cor="branca", tamanho="M")}
+    assert base  # não-vazio
+    for variante in ("Branca", "BRANCA"):
+        v = {p.sku for p, _ in repo.disponibilidade(produto="camiseta", cor=variante, tamanho="M")}
+        assert v == base
+
+
+def test_disponibilidade_cor_direta_continua_funcionando(repo):
+    # a cor real no gênero do catálogo ("branco") segue casando (não quebrou o caminho atual).
+    r = repo.disponibilidade(cor="branco")
+    assert any(p.sku == "340103413-M" for p, _ in r)
+
+
+def test_disponibilidade_falso_positivo_cor_inexistente(repo):
+    # 'marinha' inverteria p/ 'marinho', que NÃO existe no catálogo -> nada (zero falso positivo).
+    assert repo.disponibilidade(cor="marinha") == []

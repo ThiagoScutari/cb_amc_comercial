@@ -19,6 +19,7 @@ from typing import Protocol
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
+from app.data.catalogo import equivalente_genero_cor
 from app.data.models import (
     Cliente,
     Devolucao,
@@ -137,13 +138,16 @@ class MockRepository:
         stmt = select(Produto).where(Produto.ativo)
         for token in (t for t in texto_busca.split() if t):
             like = f"%{token}%"
-            stmt = stmt.where(
-                or_(
-                    Produto.produto.ilike(like),
-                    Produto.cor.ilike(like),
-                    Produto.tamanho.ilike(like),
-                )
-            )
+            condicoes = [
+                Produto.produto.ilike(like),
+                Produto.cor.ilike(like),
+                Produto.tamanho.ilike(like),
+            ]
+            # equivalência de gênero de cor ("branca" -> "Branco"), validada no catálogo.
+            equiv = equivalente_genero_cor(token)
+            if equiv is not None:
+                condicoes.append(Produto.cor.ilike(f"%{equiv}%"))
+            stmt = stmt.where(or_(*condicoes))
         return list(self.session.scalars(stmt.order_by(Produto.sku).limit(50)).all())
 
     def disponibilidade(
@@ -161,7 +165,12 @@ class MockRepository:
             if produto:
                 stmt = stmt.where(Produto.produto.ilike(f"%{produto}%"))
             if cor:
-                stmt = stmt.where(Produto.cor.ilike(f"%{cor}%"))
+                # equivalência de gênero de cor ("branca" -> "Branco"), validada no catálogo.
+                cond_cor = Produto.cor.ilike(f"%{cor}%")
+                equiv = equivalente_genero_cor(cor)
+                if equiv is not None:
+                    cond_cor = or_(cond_cor, Produto.cor.ilike(f"%{equiv}%"))
+                stmt = stmt.where(cond_cor)
             if tamanho:
                 stmt = stmt.where(Produto.tamanho == tamanho)
         stmt = stmt.order_by(Produto.sku).limit(50)
