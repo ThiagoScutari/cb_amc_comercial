@@ -38,6 +38,7 @@ class FakeWhatsAppClient:
         self.audios: list[tuple[str, bytes]] = []
         # (telefone, conteudo, filename, mimetype)
         self.documentos: list[tuple[str, bytes, str, str]] = []
+        self.captions: list[str | None] = []  # legenda do documento (deve ir em ambos os canais)
         self.falha_documento = False  # True -> enviar_documento levanta (simula Meta fora)
         self.buscou = 0
         self._audio_in = audio_in
@@ -56,6 +57,7 @@ class FakeWhatsAppClient:
         if self.falha_documento:
             raise RuntimeError("cloud api media caiu")
         self.documentos.append((telefone, conteudo, filename, mimetype))
+        self.captions.append(caption)
         return True
 
     async def buscar_audio(self, mensagem):
@@ -291,18 +293,38 @@ async def test_audio_autenticado_transcreve_responde_e_espelha_audio():
     await disp.processar(_audio_payload())
     assert client.buscou == 1 and stt.chamadas == 1
     assert orq.chamadas[0]["origem_audio"] is True  # ativa o read-back de números
-    assert client.textos == [(_TEL, "resposta do agente")]  # TEXTO sempre
     assert client.audios == [(_TEL, b"mp3")]  # áudio entra -> áudio sai
+    assert client.textos == []  # S19b: áudio-in NÃO manda o texto longo (redundante)
 
 
-async def test_audio_fala_por_extenso_texto_continua_formatado():
-    # Porta única: o TEXTO sai formatado (dígitos); o ÁUDIO é o MESMO conteúdo, mas
-    # números por extenso (para_fala roda entre responder() e sintetizar()).
+async def test_audio_fala_por_extenso_e_nao_manda_texto_longo():
+    # Áudio-in: o ÁUDIO é derivado por para_fala; o texto longo NÃO acompanha (S19b).
     disp, client, orq, stt, tts = _make()
     orq.resposta = "Seu pedido tem 200 peças."
     await disp.processar(_audio_payload())
-    assert client.textos == [(_TEL, "Seu pedido tem 200 peças.")]  # texto: formatado, verbatim
     assert tts.textos == ["Seu pedido tem duzentas peças."]  # áudio: derivado, por extenso
+    assert client.textos == []  # texto longo não vai junto do áudio
+    assert client.audios == [(_TEL, b"mp3")]
+
+
+async def test_audio_com_gatilho_envia_audio_e_pdf_sem_texto_longo():
+    # Áudio-in COM documento visual: ÁUDIO + PDF (com caption), SEM o texto longo.
+    disp, client, orq, stt, tts = _make()
+    stt.texto = "meus pedidos"  # a transcrição vira gatilho de documento
+    await disp.processar(_audio_payload())
+    assert client.audios == [(_TEL, b"mp3")]  # áudio entregue
+    assert client.textos == []  # sem o texto longo
+    assert len(client.documentos) == 1 and client.documentos[0][3] == "application/pdf"
+    assert client.captions[0]  # a caption do PDF acompanha mesmo no canal de áudio
+
+
+async def test_texto_com_gatilho_envia_texto_e_pdf_sem_audio():
+    # Texto-in COM documento visual: TEXTO + PDF, SEM áudio.
+    disp, client, orq, stt, tts = _make()
+    await disp.processar(_texto_payload("meus pedidos"))
+    assert len(client.textos) == 1  # texto entregue
+    assert client.audios == []  # texto-in: nenhum áudio (sem custo de TTS)
+    assert len(client.documentos) == 1 and client.captions[0]  # PDF + caption
 
 
 # ---------- resumo visual em PDF (aditivo) ----------
@@ -445,10 +467,10 @@ async def test_audio_ininteligivel_pede_para_repetir_sem_chamar_agente():
 
 # ---------- contrato da Fase 7 ----------
 async def test_contrato_audio_none_texto_entregue_mesmo_assim():
-    # TTS falha (None) -> o cliente AINDA recebe a resposta escrita; bot nunca fica mudo.
+    # S19b: áudio-in com TTS falho (None) -> FALLBACK obrigatório p/ texto; bot nunca fica mudo.
     disp, client, orq, stt, tts = _make(audio_out=None)
     await disp.processar(_audio_payload())
-    assert client.textos == [(_TEL, "resposta do agente")]  # texto entregue
+    assert client.textos == [(_TEL, "resposta do agente")]  # fallback: texto entregue
     assert client.audios == []  # nenhum áudio, e nenhuma exceção
 
 

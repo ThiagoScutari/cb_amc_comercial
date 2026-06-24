@@ -246,13 +246,19 @@ class Dispatcher:
                 )
             finally:
                 await self._cancelar_ack(ack_task)
-            await self.client.enviar_texto(msg.telefone, resposta)  # TEXTO SEMPRE (a garantia)
-            if origem_audio:  # espelha o canal (§8.3): áudio entra -> áudio sai (best-effort)
+            # Entrega por CANAL (§8.3): áudio-in -> ÁUDIO (sem o texto longo, redundante);
+            # texto-in -> TEXTO. Garantia "texto OU áudio sempre": se o TTS falhar, cai de
+            # volta no texto — o bot NUNCA fica mudo. O PDF (abaixo) acompanha ambos os canais.
+            if origem_audio:
                 # Texto formatado -> falável (números/datas por extenso) ANTES do TTS.
                 # MESMO conteúdo, só a forma muda (porta única). para_fala degrada sozinho.
                 audio_out = await self.sintetizador.sintetizar(para_fala(resposta))
-                if audio_out:  # áudio None ⇒ o texto JÁ saiu acima (contrato Fase 7)
+                if audio_out:
                     await self.client.enviar_audio(msg.telefone, audio_out)
+                else:  # FALLBACK obrigatório: TTS falhou -> entrega o texto (nunca mudo)
+                    await self.client.enviar_texto(msg.telefone, resposta)
+            else:
+                await self.client.enviar_texto(msg.telefone, resposta)
             # ADITIVO: resumo visual em HTML (diferencial da demo). Roda DEPOIS do texto
             # já garantido; QUALQUER falha (geração ou envio) degrada em silêncio — o
             # cliente já recebeu a resposta em texto (listando os pedidos). Nunca quebra.
