@@ -15,6 +15,8 @@ class EspiaFerramentas:
     def __init__(self, alvo: Ferramentas) -> None:
         self._alvo = alvo
         self.chamadas: list[tuple[str, dict]] = []
+        # (tool, retorno): observa o que a tool DEVOLVEU — checagem anti-vazamento (S15b/E8).
+        self.retornos: list[tuple[str, object]] = []
 
     def __getattr__(self, nome: str):
         attr = getattr(self._alvo, nome)
@@ -23,7 +25,9 @@ class EspiaFerramentas:
 
         def _wrap(**kwargs):
             self.chamadas.append((nome, kwargs))
-            return attr(**kwargs)
+            ret = attr(**kwargs)
+            self.retornos.append((nome, ret))
+            return ret
 
         return _wrap
 
