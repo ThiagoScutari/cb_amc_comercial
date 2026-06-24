@@ -31,30 +31,43 @@ def test_unidades_e_caixas_femininos():
     assert para_fala("3 caixas") == "três caixas"
 
 
-# ---------- valores em reais (APROXIMADOS no áudio; o texto ao cliente fica exato) ----------
-def test_valor_milhares_arredonda_a_centena_com_cerca_de():
-    # antes era exato ('...seiscentos e doze reais'); agora arredonda à centena p/ fala leve
-    assert para_fala("R$ 38.612,00") == "cerca de trinta e oito mil e seiscentos reais"
+# ---------- S19a-A: valores -> inteiro CHEIO, centavo TRUNCADO, 'cerca de' só quando trunca ----
+def test_valor_inteiro_cheio_centavo_truncado_com_cerca_de():
+    # R$ 50.474,90 -> inteiro cheio 50474 (centavo descartado), com 'cerca de'
+    assert (
+        para_fala("R$ 50.474,90") == "cerca de cinquenta mil quatrocentos e setenta e quatro reais"
+    )
 
 
-def test_valor_milhares_com_centavos_arredonda_e_descarta_centavos():
-    out = para_fala("R$ 5.791,80")
-    assert "cerca de" in out and "cinco mil" in out and "oitocentos" in out
-    assert "oitenta" not in out  # centavos NÃO são falados na aproximação
+def test_valor_milhao_inteiro_cheio_truncado():
+    assert (
+        para_fala("R$ 1.282.540,70")
+        == "cerca de um milhão duzentos e oitenta e dois mil quinhentos e quarenta reais"
+    )
 
 
-def test_valor_reais_e_centavos_arredonda_a_centena():
-    # 1.234,56 -> milhares arredonda à centena (1200); centavos somem
-    assert para_fala("R$ 1.234,56") == "cerca de mil e duzentos reais"
+def test_valor_exato_sem_centavo_nao_leva_cerca_de():
+    assert para_fala("R$ 50.000,00") == "cinquenta mil reais"
+    assert para_fala("R$ 38.612,00") == "trinta e oito mil seiscentos e doze reais"
 
 
-def test_valor_um_real_singular_fica_exato():
-    # < 100 reais é curto: mantém exato (sem 'cerca de'), centavos zero não somam nada
+def test_valor_com_centavo_leva_cerca_de_e_inteiro_cheio():
+    assert para_fala("R$ 5.791,80") == "cerca de cinco mil setecentos e noventa e um reais"
+    assert para_fala("R$ 1.234,56") == "cerca de mil duzentos e trinta e quatro reais"
+
+
+def test_centavo_e_truncado_nunca_arredondado_pra_cima():
+    # 50.474,90 -> ...e quatro (474); JAMAIS ...e cinco (475)
+    out = para_fala("R$ 50.474,90")
+    assert "setenta e quatro reais" in out and "setenta e cinco" not in out
+
+
+def test_valor_um_real_singular():
     assert para_fala("R$ 1,00") == "um real"
 
 
 def test_valor_so_centavos_mantem_fala_dos_centavos():
-    # sub-1-real: arredondar zeraria o valor -> mantém a fala dos centavos (como antes)
+    # sub-R$ 1: truncar zeraria o valor -> mantém a fala dos centavos
     assert para_fala("R$ 0,50") == "cinquenta centavos"
 
 
@@ -62,31 +75,11 @@ def test_valor_um_centavo_singular():
     assert para_fala("R$ 0,01") == "um centavo"
 
 
-def test_arredonda_so_a_moeda_preserva_pedido_e_data():
-    # CRÍTICO: arredondamento é SÓ p/ moeda. Nº de pedido e data passam intactos.
-    out = para_fala("Pedido 5001 no valor de R$ 5.791,80 para 13/06/2026.")
-    assert "cinco mil e um" in out  # pedido: cardinal EXATO, não arredondado p/ 'cinco mil'
-    assert "cerca de" in out and "cinco mil e oitocentos reais" in out  # moeda: aproximada
+def test_valor_so_a_moeda_preserva_data():
+    out = para_fala("No valor de R$ 5.791,80 para 13/06/2026.")
+    assert "cerca de cinco mil setecentos e noventa e um reais" in out
     assert "treze de junho de 2026" in out  # data intacta
     assert "oitenta" not in out  # centavos da moeda somem
-
-
-def test_data_e_pedido_sozinhos_nao_levam_cerca_de():
-    # sem moeda no texto, nada de 'cerca de' nem arredondamento (sem regressão)
-    out = para_fala("Pedido 5001 confirmado para 13/06/2026.")
-    assert "cinco mil e um" in out and "treze de junho de 2026" in out
-    assert "cerca de" not in out
-
-
-def test_arredondamento_que_falha_degrada_para_o_texto_original(monkeypatch):
-    # formato inesperado no arredondamento -> para_fala cai no texto original, sem levantar
-    import app.voice.fala as fala
-
-    def explode(*_a, **_k):
-        raise RuntimeError("formato inesperado")
-
-    monkeypatch.setattr(fala, "_arredondar_reais", explode)
-    assert para_fala("R$ 5.791,80") == "R$ 5.791,80"
 
 
 # ---------- datas dd/mm/aaaa (ano em dígitos) ----------
@@ -113,7 +106,7 @@ def test_ano_solto_preservado():
 def test_frase_completa_da_demo():
     entrada = "Seu pedido tem 200 peças, no valor de R$ 38.612,00, com entrega em 28/06/2026."
     esperado = (
-        "Seu pedido tem duzentas peças, no valor de cerca de trinta e oito mil e seiscentos "
+        "Seu pedido tem duzentas peças, no valor de trinta e oito mil seiscentos e doze "
         "reais, com entrega em vinte e oito de junho de 2026."
     )
     assert para_fala(entrada) == esperado
@@ -138,15 +131,15 @@ def test_texto_sem_numeros_inalterado():
 
 # ---------- S18a: valores grandes (milhão/bilhão) — a engorda da S17 criou valores de milhão ----
 def test_valor_milhao_da_demo():
-    # R$ 1.282.540,70 (pedido real da demo): ANTES degradava a frase TODA pro cru; agora fala
+    # R$ 1.282.540,70 (pedido real da demo): inteiro CHEIO, centavo truncado (S19a)
     out = para_fala("R$ 1.282.540,70")
     assert "R$" not in out and "1.282.540" not in out
-    assert out == "cerca de um milhão duzentos e oitenta e dois mil e quinhentos reais"
+    assert out == "cerca de um milhão duzentos e oitenta e dois mil quinhentos e quarenta reais"
 
 
 def test_valor_milhoes_da_demo():
     out = para_fala("R$ 2.603.247,50")
-    assert out == "cerca de dois milhões seiscentos e três mil e duzentos reais"
+    assert out == "cerca de dois milhões seiscentos e três mil duzentos e quarenta e sete reais"
 
 
 def test_cardinal_bordas_do_milhao():
@@ -184,7 +177,7 @@ def test_blindagem_por_token_nao_contamina_a_frase(monkeypatch):
     real = fala._cardinal
 
     def parcial(n, fem=False):
-        if n == 5800:  # valor arredondado de R$ 5.791,80
+        if n == 5791:  # inteiro cheio de R$ 5.791,80 (S19a: sem arredondar)
             raise RuntimeError("boom só nesse token")
         return real(n, fem)
 
@@ -239,3 +232,48 @@ def test_audio_only_a_tela_mantem_o_codigo():
 def test_determinismo_mesmo_input_mesma_saida():
     entrada = "Pedido 4477, R$ 1.282.540,70, rastreio BR600030001BR, em 07/05/2026."
     assert para_fala(entrada) == para_fala(entrada)
+
+
+# ---------- S19a-B: número de documento (cardinal s/ zero interno; dígito-a-dígito c/ zero) ----
+def test_nf_com_zero_interno_vira_digito_a_digito():
+    # cardinal emborraria ("sessenta mil e dois"); dígito-a-dígito deixa os zeros audíveis
+    assert para_fala("nota 60002") == "nota seis zero zero zero dois"
+    assert para_fala("NF 60003") == "NF seis zero zero zero três"
+    assert para_fala("título 70013") == "título sete zero zero um três"
+    assert para_fala("boleto 60005") == "boleto seis zero zero zero cinco"
+
+
+def test_nota_fiscal_dois_termos_dispara_pela_palavra_fiscal():
+    assert para_fala("nota fiscal 60005") == "nota fiscal seis zero zero zero cinco"
+
+
+def test_documento_sem_zero_interno_fica_cardinal():
+    assert para_fala("pedido 4471") == "pedido quatro mil quatrocentos e setenta e um"
+    assert para_fala("pedido 4452") == "pedido quatro mil quatrocentos e cinquenta e dois"
+
+
+def test_pedido_com_zero_interno_vira_digitos_melhora_read_back():
+    # 5001 tem zero interno -> dígito-a-dígito (read-back da S15 fica claro)
+    assert para_fala("pedido 5001") == "pedido cinco zero zero um"
+
+
+def test_regra_documento_so_dispara_com_palavra_chave_quantidade_intacta():
+    # sem palavra-chave de documento, é quantidade -> cardinal com gênero (NÃO dígito-a-dígito)
+    assert para_fala("200 peças") == "duzentas peças"
+    assert para_fala("tenho 200 peças") == "tenho duzentas peças"
+
+
+def test_valor_em_reais_nao_e_tratado_como_documento():
+    # 60.002 dentro de um R$ é VALOR (cardinal), não documento (dígitos)
+    assert para_fala("R$ 60.002,00") == "sessenta mil e dois reais"
+
+
+def test_ano_apos_palavra_chave_e_preservado():
+    # número de 4 dígitos 1900-2099 logo após palavra-chave é ano, não documento -> preserva
+    assert para_fala("número 2026") == "número 2026"
+
+
+def test_quantidade_apos_keyword_nao_quebra_genero_quando_ha_separador():
+    # "pedido de 200 peças": 'pedido' seguido de 'de' (não-dígito) -> NÃO dispara doc;
+    # 200 segue como quantidade feminina
+    assert para_fala("pedido de 200 peças") == "pedido de duzentas peças"

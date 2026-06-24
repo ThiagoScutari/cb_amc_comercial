@@ -5,9 +5,10 @@ UMA resposta formatada (dígitos, R$ 0.000,00, dd/mm/aaaa) para o TEXTO; aqui el
 convertida para fala ANTES do TTS. O conteúdo é o MESMO — só a forma muda — então a
 porta única é preservada (o áudio é derivado do texto, sem geração paralela).
 
-ESCOPO (do nosso domínio, não o universo): inteiros até ~milhares, valores em reais
-(reais/centavos, "um real" singular), datas dd/mm/aaaa (ano em dígitos), RefId de 7+
-dígitos lido dígito a dígito, e ano 1900-2099 solto preservado em dígitos.
+ESCOPO (do nosso domínio, não o universo): inteiros até bilhões, valores em reais com o
+inteiro CHEIO e o centavo TRUNCADO ("cerca de" só quando trunca), número de DOCUMENTO
+(NF/pedido/título) cardinal-ou-dígito-a-dígito por palavra-chave, datas dd/mm/aaaa (ano em
+dígitos), RefId de 7+ dígitos dígito a dígito, e ano 1900-2099 solto preservado.
 
 SEGURO (inviolável): `para_fala` degrada para o texto ORIGINAL em QUALQUER erro. O
 áudio NUNCA pode quebrar por causa da conversão — no pior caso, fala o texto formatado.
@@ -121,6 +122,15 @@ _RE_REFID = re.compile(r"\b\d{7,}\b")
 # não têm os grupos cardinalizados por engano (evita "cinco.setecentos e noventa e um,oitenta").
 _RE_INTEIRO = re.compile(r"(?<![\d/.,])(\d{1,6})(?![\d/.,])([ \t]+[A-Za-zÀ-ÿ]+)?")
 
+# Número de DOCUMENTO (NF/pedido/título/devolução) por PALAVRA-CHAVE anterior (curada). Lido
+# CARDINAL quando lê bem; DÍGITO-A-DÍGITO quando tem ZERO INTERNO (cardinal emborra os zeros:
+# "60002" viraria "sessenta mil e dois"). Só DEPOIS da palavra-chave -> quantidade/valor intactos.
+_RE_DOC = re.compile(
+    r"\b(pedidos?|notas?|nf|fiscal|t[íi]tulos?|boletos?|devolu[çc](?:[ãa]o|[õo]es)|"
+    r"n[úu]meros?|n[º°])(\s+)(\d{1,6})\b",
+    re.IGNORECASE,
+)
+
 # Códigos NÃO-vocalizáveis (S18a): soletrar 44+ dígitos é inaudível por natureza. Detecção
 # por FORMATO/comprimento (padrão nacional), nunca pelos números da demo. Só o ÁUDIO os troca
 # por uma frase; a TELA (router:248, resposta crua) mantém os códigos completos.
@@ -168,35 +178,38 @@ def _converter_datas(texto: str) -> str:
     return _RE_DATA.sub(_seguro(repl), texto)
 
 
-def _arredondar_reais(reais: int) -> int:
-    """Valor em reais (centavos já fora) -> forma falável ARREDONDADA. Milhares -> centena
-    ('cinco mil e oitocentos'); centenas -> dezena; < 100 -> exato (já é curto).
+def _converter_documentos(texto: str) -> str:
+    """Número de documento (logo após palavra-chave): CARDINAL quando lê bem, DÍGITO-A-DÍGITO
+    quando tem zero interno. 'Zero interno' = há '0' em posição não-líder (`"0" in num[1:]`)."""
 
-    Decisão (porta única): o áudio é leve e aproximado; o valor EXATO acompanha no TEXTO que
-    o cliente recebe junto. Vale SÓ para moeda — nunca toca pedido, quantidade, data ou código.
-    """
-    if reais >= 1000:
-        return round(reais / 100) * 100  # casa dos milhares: à centena
-    if reais >= 100:
-        return round(reais / 10) * 10  # centenas: à dezena (ainda preciso)
-    return reais  # < 100: curto o bastante, mantém exato
+    def repl(m: re.Match[str]) -> str:
+        kw, sep, num = m.group(1), m.group(2), m.group(3)
+        n = int(num)
+        if len(num) == 4 and 1900 <= n <= 2099:  # ano: não é número de documento, preserva
+            return m.group(0)
+        if "0" in num[1:]:  # zero interno -> dígito-a-dígito (zeros audíveis)
+            falado = " ".join(_DIGITO[d] for d in num)
+        else:
+            falado = _cardinal(n)  # sem zero interno -> cardinal lê bem
+        return f"{kw}{sep}{falado}"
+
+    return _RE_DOC.sub(_seguro(repl), texto)
 
 
 def _converter_valores(texto: str) -> str:
-    """Valor monetário (R$) -> fala APROXIMADA: centavos somem, o valor é arredondado e
-    'cerca de' sinaliza a aproximação. SÓ mexe em moeda (R$ + ,dd do _RE_MOEDA) — datas,
-    pedidos, quantidades e códigos não passam por aqui. Sub-1-real (só centavos) mantém a
-    fala dos centavos (arredondar zeraria o valor)."""
+    """Valor monetário (R$) -> fala: o inteiro de reais CHEIO, com o centavo TRUNCADO (nunca
+    arredondado: 50.474,90 -> '...quatrocentos e setenta e quatro', jamais '...e cinco'). O
+    'cerca de' sai SÓ quando há centavo descartado (centavos != 0); valor exato (,00) fala
+    direto. SÓ mexe em moeda (R$ + ,dd do _RE_MOEDA). Sub-R$ 1 (reais == 0) fala os centavos —
+    truncar zeraria o valor."""
 
     def repl(m: re.Match[str]) -> str:
         reais = int(m.group(1).replace(".", ""))
         centavos = int(m.group(2))
-        if reais == 0:  # ex.: R$ 0,80 -> arredondar daria "zero reais"; fala os centavos
+        if reais == 0:  # ex.: R$ 0,80 -> truncar daria "zero reais"; fala os centavos
             return f"{_cardinal(centavos)} {'centavo' if centavos == 1 else 'centavos'}"
-        falado = _arredondar_reais(reais)
-        aproximado = falado != reais or centavos != 0  # rotula só quando NÃO é exato
-        prefixo = "cerca de " if aproximado else ""
-        return f"{prefixo}{_cardinal(falado)} {'real' if falado == 1 else 'reais'}"
+        prefixo = "cerca de " if centavos != 0 else ""  # 'cerca de' só quando trunca o centavo
+        return f"{prefixo}{_cardinal(reais)} {'real' if reais == 1 else 'reais'}"
 
     return _RE_MOEDA.sub(_seguro(repl), texto)
 
@@ -227,6 +240,7 @@ def para_fala(texto: str) -> str:
     try:
         s = _filtrar_codigos(texto)  # remove códigos não-vocalizáveis ANTES de tokenizar
         s = _converter_datas(s)
+        s = _converter_documentos(s)  # número de documento ANTES de cardinalizar inteiros
         s = _converter_valores(s)
         s = _converter_refids(s)
         return _converter_inteiros(s)
