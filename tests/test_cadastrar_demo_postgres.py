@@ -21,7 +21,7 @@ Prova dos dois lados:
 import pytest
 from app.data.models import Cliente
 from scripts.cadastrar_demo import cadastrar
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 pytestmark = pytest.mark.postgres
@@ -35,22 +35,24 @@ def test_cadastrar_apos_seed_nao_colide(pg_session):
 
     Só passa porque popular() realinhou a sequence; é a regressão que trava o bug.
     """
+    max_seed = pg_session.scalar(select(func.max(Cliente.id)))  # maior id do roster do seed
     resumo = cadastrar(pg_session, "5547999998888", "Boutique do João")
     cliente = pg_session.scalar(select(Cliente).where(Cliente.telefone_whatsapp == "5547999998888"))
     assert resumo.acao == "criado"
     assert cliente is not None
-    assert cliente.id >= 11  # acima dos ids fixos 1..10 do seed (sem colidir)
+    assert cliente.id > max_seed  # acima do roster do seed, sem colidir (relativo, não hardcode)
     pg_session.rollback()  # não polui o módulo (mesmo padrão dos writes de IDOR)
 
 
 def test_segundo_cadastro_tambem_nao_colide(pg_session):
-    """Dois cadastros distintos em sequência: ambos OK, ids distintos e >= 11."""
+    """Dois cadastros distintos em sequência: ambos OK, ids distintos e acima do seed."""
+    max_seed = pg_session.scalar(select(func.max(Cliente.id)))
     r1 = cadastrar(pg_session, "5547999990001", "Loja Um")
     id1 = pg_session.scalar(select(Cliente.id).where(Cliente.telefone_whatsapp == "5547999990001"))
     r2 = cadastrar(pg_session, "5547999990002", "Loja Dois")
     id2 = pg_session.scalar(select(Cliente.id).where(Cliente.telefone_whatsapp == "5547999990002"))
     assert r1.acao == r2.acao == "criado"
-    assert id1 >= 11 and id2 >= 11 and id1 != id2
+    assert id1 > max_seed and id2 > max_seed and id1 != id2
     pg_session.rollback()
 
 

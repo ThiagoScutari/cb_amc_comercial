@@ -37,7 +37,7 @@ def db(session) -> Session:
 
 # ---------- contagens ----------
 def test_contagens(db):
-    assert len(db.scalars(select(Cliente)).all()) == 10
+    assert len(db.scalars(select(Cliente)).all()) == 3  # roster enxuto {1, 2, 3} (S17a)
     assert len(db.scalars(select(Produto)).all()) == len(carregar_produtos())
     assert len(db.scalars(select(Pedido)).all()) >= 9
 

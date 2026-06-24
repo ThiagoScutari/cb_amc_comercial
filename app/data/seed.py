@@ -25,6 +25,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.data.catalogo import carregar_produtos
 from app.data.db import criar_engine, criar_sessionmaker, recriar_schema
 from app.data.models import (
@@ -47,7 +48,6 @@ from app.data.models import (
 
 DATA_REF = dt.date(2026, 6, 16)  # âncora fixa (determinismo de demo)
 DEMO_CLIENTE_ID = 1
-DEMO_PHONE = "5531999990001"  # TODO Fase 8: trocar pelo número dedicado do WhatsApp
 
 # offsets em dias por status: (data_pedido, data_prevista_entrega). None = sem prazo.
 _OFFSETS: dict[StatusPedido, tuple[int, int | None]] = {
@@ -87,13 +87,16 @@ _SALDO_DEMO: dict[str, int] = {
     "380103554-M": 0,  # kit regata M — sold-out ("não tem")
 }
 
-_CLIENTES: list[dict] = [
+# Roster ENXUTO {1, 2, 3} (S17a): todos interagíveis. SEM telefone aqui — ele vem das
+# settings em runtime (`_clientes`): default fictício em dev/CI, real na VPS via .env.
+# Cliente 1 = demo rico; cliente 2 = "o outro lojista" do IDOR (E4/E8/test_idor casam a
+# identidade); cliente 3 = pedidos SEM fiscal (preserva o faturamento-sem-NF).
+_CLIENTES_BASE: list[dict] = [
     {
         "id": 1,
         "razao_social": "Boutique Aurora Comércio de Roupas LTDA",
         "nome_fantasia": "Boutique Aurora",
         "cnpj": "11222333000181",
-        "telefone_whatsapp": DEMO_PHONE,
         "contato_nome": "Marina Prado",
         "cidade_uf": "Belo Horizonte/MG",
         "condicao_pagamento": "28/35/42 dias",
@@ -103,92 +106,31 @@ _CLIENTES: list[dict] = [
         "razao_social": "Maré Alta Moda Praia LTDA",
         "nome_fantasia": "Maré Alta Store",
         "cnpj": "22333444000172",
-        "telefone_whatsapp": "5531988880002",
         "contato_nome": "RafaelNunes",
         "cidade_uf": "Vitória/ES",
         "condicao_pagamento": "à vista",
     },
     {
         "id": 3,
-        "razao_social": "Estilo Urbano Confecções LTDA",
-        "nome_fantasia": "Estilo Urbano",
+        "razao_social": "Debora Modas Comércio de Vestuário LTDA",
+        "nome_fantasia": "Debora Modas",
         "cnpj": "33444555000163",
-        "telefone_whatsapp": "5511977770003",
-        "contato_nome": "Camila Souza",
+        "contato_nome": "Débora Lima",
         "cidade_uf": "São Paulo/SP",
         "condicao_pagamento": "30/60 dias",
     },
-    {
-        "id": 4,
-        "razao_social": "Loja do Sol Vestuário EIRELI",
-        "nome_fantasia": "Loja do Sol",
-        "cnpj": "44555666000154",
-        "telefone_whatsapp": "5585966660004",
-        "contato_nome": "Bruno Carvalho",
-        "cidade_uf": "Fortaleza/CE",
-        "condicao_pagamento": "28/35/42 dias",
-    },
-    {
-        "id": 5,
-        "razao_social": "Vitrine Sul Comércio de Confecções LTDA",
-        "nome_fantasia": "Vitrine Sul",
-        "cnpj": "55666777000145",
-        "telefone_whatsapp": "5551955550005",
-        "contato_nome": "Letícia Ramos",
-        "cidade_uf": "Porto Alegre/RS",
-        "condicao_pagamento": "à vista",
-    },
-    {
-        "id": 6,
-        "razao_social": "Charme & Cia Modas LTDA",
-        "nome_fantasia": "Charme & Cia",
-        "cnpj": "66777888000136",
-        "telefone_whatsapp": "5562944440006",
-        "contato_nome": "Diego Faria",
-        "cidade_uf": "Goiânia/GO",
-        "condicao_pagamento": "30/60 dias",
-    },
-    {
-        "id": 7,
-        "razao_social": "Atelier da Moda Comércio LTDA",
-        "nome_fantasia": "Atelier da Moda",
-        "cnpj": "77888999000127",
-        "telefone_whatsapp": "5571933330007",
-        "contato_nome": "Patrícia Lopes",
-        "cidade_uf": "Salvador/BA",
-        "condicao_pagamento": "28/35/42 dias",
-    },
-    {
-        "id": 8,
-        "razao_social": "Norte Fashion Distribuidora LTDA",
-        "nome_fantasia": "Norte Fashion",
-        "cnpj": "88999000000118",
-        "telefone_whatsapp": "5591922220008",
-        "contato_nome": "Gustavo Pinto",
-        "cidade_uf": "Belém/PA",
-        "condicao_pagamento": "à vista",
-    },
-    {
-        "id": 9,
-        "razao_social": "Bella Vita Boutique LTDA",
-        "nome_fantasia": "Bella Vita",
-        "cnpj": "99000111000109",
-        "telefone_whatsapp": "5547911110009",
-        "contato_nome": "Fernanda Dias",
-        "cidade_uf": "Blumenau/SC",
-        "condicao_pagamento": "30/60 dias",
-    },
-    {
-        "id": 10,
-        "razao_social": "Capital Modas Comércio LTDA",
-        "nome_fantasia": "Capital Modas",
-        "cnpj": "10111213000191",
-        "telefone_whatsapp": "5561900000010",
-        "contato_nome": "Thiago Martins",
-        "cidade_uf": "Brasília/DF",
-        "condicao_pagamento": "28/35/42 dias",
-    },
 ]
+
+
+def _clientes(settings: Settings) -> list[dict]:
+    """Clientes do seed com `telefone_whatsapp` injetado das settings (S17a).
+
+    Default fictício determinístico em dev/CI (mesmas settings -> mesma lista, preserva o
+    determinismo); número real na VPS via `.env`. Não introduz random nem data.
+    """
+    fones = {1: settings.demo_phone_1, 2: settings.demo_phone_2, 3: settings.demo_phone_3}
+    return [{**c, "telefone_whatsapp": fones[c["id"]]} for c in _CLIENTES_BASE]
+
 
 # Ciclo de status p/ os pedidos dos demais clientes (cobre faturados e não-faturados).
 _CICLO_OUTROS = [
@@ -272,17 +214,19 @@ def _saldo_baseline(i: int) -> int:
     return 15 + (i * 7) % 60
 
 
-def _plano_pedidos(sku_idx) -> list[tuple[int, int, StatusPedido, list[tuple[str, int]]]]:
+def _plano_pedidos(
+    sku_idx, clientes: list[dict]
+) -> list[tuple[int, int, StatusPedido, list[tuple[str, int]]]]:
     """(numero, cliente_id, status, [(sku, quantidade)]) — determinístico."""
     planos: list[tuple[int, int, StatusPedido, list[tuple[str, int]]]] = []
     # cliente-demo: um pedido por status
     for i, (numero, status) in enumerate(_DEMO_PEDIDOS):
         itens = _DEMO_ITENS.get(numero) or [(sku_idx(17 + i * 13), 6 + i)]
         planos.append((numero, DEMO_CLIENTE_ID, status, itens))
-    # demais clientes (id 2..10): 2 pedidos cada, números 4450..4467
+    # demais clientes (id 2..3): 2 pedidos cada, números 4450..4453
     numero = 4450
     k = 0
-    for cliente in _CLIENTES:
+    for cliente in clientes:
         if cliente["id"] == DEMO_CLIENTE_ID:
             continue
         for _ in range(2):
@@ -446,7 +390,7 @@ def criar_devolucao(
     )
 
 
-def _semear_fiscais(session: Session, ped_by_id: dict[int, Pedido]) -> None:
+def _semear_fiscais(session: Session, ped_by_id: dict[int, Pedido], clientes: list[dict]) -> None:
     """Passo 6 (S12): NFs (faturadas) -> títulos -> devoluções. Determinístico e FK-safe.
 
     Reusa os pedidos já persistidos (ped_by_id) — NÃO inventa SKU nem recalcula valores.
@@ -480,7 +424,7 @@ def _semear_fiscais(session: Session, ped_by_id: dict[int, Pedido]) -> None:
     session.flush()
 
     # 6b) títulos: nº de parcelas vem da condição comercial do cliente (Σ parcelas == valor NF)
-    cli_by_id = {c["id"]: c for c in _CLIENTES}
+    cli_by_id = {c["id"]: c for c in clientes}
     prox_titulo = _TITULO_BASE
     for numero_nf, nf in nf_by_numero.items():
         dias = _parcelas_dias(cli_by_id[nf.cliente_id]["condicao_pagamento"])
@@ -549,8 +493,10 @@ def _sincronizar_sequence_clientes(session: Session) -> None:
 
 def popular(session: Session) -> None:
     """Popula todas as tabelas em ordem FK-safe, coerente e determinística."""
-    # 1) clientes (ids explícitos 1..10) + realinhamento da sequence (anti-colisão)
-    session.add_all(Cliente(**c) for c in _CLIENTES)
+    # telefones vêm das settings em runtime (default fictício em dev/CI; real na VPS) — S17a.
+    clientes = _clientes(get_settings())
+    # 1) clientes (ids explícitos 1..3) + realinhamento da sequence (anti-colisão)
+    session.add_all(Cliente(**c) for c in clientes)
     session.flush()
     _sincronizar_sequence_clientes(session)
 
@@ -568,7 +514,7 @@ def popular(session: Session) -> None:
     reservado: dict[int, int] = defaultdict(int)
     disponivel: dict[int, int] = defaultdict(int)
     ped_by_id: dict[int, Pedido] = {}  # reusado pelo passo 6 (NF/título/devolução)
-    for numero, cliente_id, status, itens in _plano_pedidos(sku_idx):
+    for numero, cliente_id, status, itens in _plano_pedidos(sku_idx, clientes):
         pedido = criar_pedido(numero, cliente_id, status, itens, prod_by_sku)
         # bucket de estoque: faturado->reservado; não-faturado e não-cancelado->disponivel.
         if status in STATUS_FATURADOS:
@@ -608,7 +554,7 @@ def popular(session: Session) -> None:
     session.flush()
 
     # 6) entidades fiscais (S12): NF -> títulos -> devoluções (após os pedidos; FK-safe)
-    _semear_fiscais(session, ped_by_id)
+    _semear_fiscais(session, ped_by_id, clientes)
 
 
 def main() -> None:  # pragma: no cover - caminho de execução real (Postgres)

@@ -48,6 +48,13 @@ class Settings(BaseSettings):
     evolution_api_key: str = ""
     evolution_instance: str = "cb-amc-comercial"
 
+    # --- Telefones dos clientes-demo do seed (S17a) ---
+    # Reais na VPS via .env; defaults FICTÍCIOS determinísticos p/ dev/CI. NÃO setar em
+    # dev/CI: os testes assumem estes defaults (o seed lê estes campos em runtime).
+    demo_phone_1: str = "5531999990001"  # cliente 1 (Boutique Aurora) — era seed.DEMO_PHONE
+    demo_phone_2: str = "5531988880002"  # cliente 2 (Maré Alta) — alvo do IDOR
+    demo_phone_3: str = "5511977770003"  # cliente 3 (Debora Modas)
+
     # --- Banco (host = nome do container, NÃO localhost) ---
     database_url: str = "postgresql+psycopg://user:pass@cb_amc_comercial_db:5432/cb_amc_comercial"
 
