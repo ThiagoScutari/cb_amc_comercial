@@ -277,3 +277,71 @@ def test_quantidade_apos_keyword_nao_quebra_genero_quando_ha_separador():
     # "pedido de 200 peças": 'pedido' seguido de 'de' (não-dígito) -> NÃO dispara doc;
     # 200 segue como quantidade feminina
     assert para_fala("pedido de 200 peças") == "pedido de duzentas peças"
+
+
+# ---------- S19c: enumeração de documentos -> regra S19a UNIFORME em toda a lista ----------
+def test_lista_de_pedidos_todos_por_extenso_uniforme():
+    # BUG REAL (S19c): "pedidos 4473, 4474, ..." só convertia o 1º (após a palavra-chave);
+    # os demais (após vírgula) chegavam CRUS ao TTS -> mistura por-extenso + dígitos = tropeço.
+    # Conserto: a regra de documento (sem zero interno -> cardinal) vale p/ TODOS os itens.
+    out = para_fala("pedidos 4473, 4474, 4475, 4476 e 4477")
+    assert out == (
+        "pedidos quatro mil quatrocentos e setenta e três, "
+        "quatro mil quatrocentos e setenta e quatro, "
+        "quatro mil quatrocentos e setenta e cinco, "
+        "quatro mil quatrocentos e setenta e seis e "
+        "quatro mil quatrocentos e setenta e sete"
+    )
+
+
+def test_lista_de_pedidos_sem_digito_cru_no_audio():
+    # Nenhum dígito cru pode sobrar quando há palavra-chave de documento antes da lista.
+    import re as _re
+
+    out = para_fala("pedidos 4473, 4474, 4475, 4476 e 4477.")
+    assert not _re.search(r"\d", out)
+
+
+def test_lista_de_pedidos_palavra_chave_nao_encosta_no_primeiro():
+    # "Os pedidos faturados são 4473, ...": 'pedidos' NÃO encosta no 1º número (há texto no meio)
+    # -> a regra de documento ainda deve uniformizar a enumeração (ancorando em 'são'? não:
+    # aqui a âncora é a enumeração após a última palavra-chave que a precede). Resultado: todos
+    # por extenso, sem dígito cru.
+    import re as _re
+
+    out = para_fala("Os pedidos faturados são 4473, 4474, 4475, 4476 e 4477.")
+    assert not _re.search(r"\d", out)
+    assert "quatro mil quatrocentos e setenta e três" in out
+    assert "quatro mil quatrocentos e setenta e sete" in out
+
+
+def test_lista_de_notas_com_zero_interno_todas_digito_a_digito():
+    # NFs têm zero interno -> dígito-a-dígito (S19a), agora UNIFORME em toda a lista.
+    out = para_fala("notas 60001, 60002 e 60003")
+    assert out == (
+        "notas seis zero zero zero um, seis zero zero zero dois e seis zero zero zero três"
+    )
+
+
+def test_lista_de_pedidos_dois_itens_com_e():
+    assert para_fala("pedidos 4471 e 4452") == (
+        "pedidos quatro mil quatrocentos e setenta e um e "
+        "quatro mil quatrocentos e cinquenta e dois"
+    )
+
+
+def test_enumeracao_nao_engole_numero_de_outra_clausula():
+    # Após a enumeração de documentos vem uma quantidade que NÃO faz parte da lista
+    # (separada por ', com' — não por vírgula+número nem ' e '+número). Não pode ser engolida.
+    out = para_fala("pedidos 4471 e 4452, com 200 peças")
+    assert "duzentas peças" in out  # quantidade preserva gênero (não virou documento)
+    assert "quatro mil quatrocentos e setenta e um" in out
+    assert "quatro mil quatrocentos e cinquenta e dois" in out
+
+
+def test_lista_nao_regride_valor_monetario_apos_a_enumeracao():
+    # Valor monetário depois da lista continua intacto (a enumeração para antes do R$).
+    out = para_fala("pedidos 4471 e 4452, no valor de R$ 5.791,80.")
+    assert "cerca de cinco mil setecentos e noventa e um reais" in out
+    assert "R$" not in out and "5.791" not in out
+    assert "quatro mil quatrocentos e setenta e um" in out

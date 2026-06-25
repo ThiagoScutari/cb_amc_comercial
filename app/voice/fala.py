@@ -125,11 +125,26 @@ _RE_INTEIRO = re.compile(r"(?<![\d/.,])(\d{1,6})(?![\d/.,])([ \t]+[A-Za-zÀ-ÿ]+
 # Número de DOCUMENTO (NF/pedido/título/devolução) por PALAVRA-CHAVE anterior (curada). Lido
 # CARDINAL quando lê bem; DÍGITO-A-DÍGITO quando tem ZERO INTERNO (cardinal emborra os zeros:
 # "60002" viraria "sessenta mil e dois"). Só DEPOIS da palavra-chave -> quantidade/valor intactos.
+_KW_DOC = (
+    r"pedidos?|notas?|nf|fiscal|t[íi]tulos?|boletos?|devolu[çc](?:[ãa]o|[õo]es)|"
+    r"n[úu]meros?|n[º°]"
+)
+# Separador INTERNO da enumeração (S19c): vírgula OU " e " entre dois números da lista.
+_SEP_ENUM = r"(?:\s*,\s*|\s+e\s+)"
+# Número ÚNICO colado à palavra-chave (S19a) — também aceita enumeração colada ("pedidos 1, 2").
 _RE_DOC = re.compile(
-    r"\b(pedidos?|notas?|nf|fiscal|t[íi]tulos?|boletos?|devolu[çc](?:[ãa]o|[õo]es)|"
-    r"n[úu]meros?|n[º°])(\s+)(\d{1,6})\b",
+    r"\b(" + _KW_DOC + r")(\s+)(\d{1,6}(?:" + _SEP_ENUM + r"\d{1,6})*)\b",
     re.IGNORECASE,
 )
+# Enumeração (2+ números) precedida — não necessariamente COLADA — por palavra-chave (S19c).
+# A "ponte" entre a palavra-chave e os números não cruza dígito nem fim de frase (.!?), então
+# fica na MESMA frase e não engole número de outra cláusula. Exigir 2+ números (o `+`) impede
+# capturar quantidade isolada após a palavra-chave ("pedido de 200 peças" -> NÃO é documento).
+_RE_DOC_LISTA = re.compile(
+    r"\b(" + _KW_DOC + r")([^\d.!?\n]*?)(\d{1,6}(?:" + _SEP_ENUM + r"\d{1,6})+)\b",
+    re.IGNORECASE,
+)
+_RE_NUM_DOC = re.compile(r"\d{1,6}")  # cada número DENTRO de uma enumeração já capturada
 
 # Códigos NÃO-vocalizáveis (S18a): soletrar 44+ dígitos é inaudível por natureza. Detecção
 # por FORMATO/comprimento (padrão nacional), nunca pelos números da demo. Só o ÁUDIO os troca
@@ -178,22 +193,32 @@ def _converter_datas(texto: str) -> str:
     return _RE_DATA.sub(_seguro(repl), texto)
 
 
+def _falar_documento(num: str) -> str:
+    """UM número de documento -> fala. Regra S19a, INALTERADA: ano (4 dígitos, 1900-2099) é
+    preservado em dígitos; com ZERO INTERNO (`"0" in num[1:]`) vai dígito-a-dígito (zeros
+    audíveis: "60002" não pode virar "sessenta mil e dois"); senão CARDINAL (lê bem)."""
+    n = int(num)
+    if len(num) == 4 and 1900 <= n <= 2099:  # ano: não é número de documento, preserva
+        return num
+    if "0" in num[1:]:  # zero interno -> dígito-a-dígito
+        return " ".join(_DIGITO[d] for d in num)
+    return _cardinal(n)  # sem zero interno -> cardinal
+
+
 def _converter_documentos(texto: str) -> str:
-    """Número de documento (logo após palavra-chave): CARDINAL quando lê bem, DÍGITO-A-DÍGITO
-    quando tem zero interno. 'Zero interno' = há '0' em posição não-líder (`"0" in num[1:]`)."""
+    """Número(s) de documento por palavra-chave -> fala. A regra POR NÚMERO é a da S19a
+    (`_falar_documento`, inalterada). S19c: quando há uma ENUMERAÇÃO ("4473, 4474 e 4475"),
+    a MESMA regra vale para TODOS os itens — uniformiza o áudio (antes, só o 1º número era
+    convertido; os seguintes, colados em vírgula, escapavam de toda regra e chegavam CRUS ao
+    TTS, misturando por-extenso com dígitos). Vale inclusive quando a palavra-chave não encosta
+    nos números ("os pedidos faturados são 4473, ..."), via `_RE_DOC_LISTA`."""
 
-    def repl(m: re.Match[str]) -> str:
-        kw, sep, num = m.group(1), m.group(2), m.group(3)
-        n = int(num)
-        if len(num) == 4 and 1900 <= n <= 2099:  # ano: não é número de documento, preserva
-            return m.group(0)
-        if "0" in num[1:]:  # zero interno -> dígito-a-dígito (zeros audíveis)
-            falado = " ".join(_DIGITO[d] for d in num)
-        else:
-            falado = _cardinal(n)  # sem zero interno -> cardinal lê bem
-        return f"{kw}{sep}{falado}"
+    def repl(m: re.Match[str]) -> str:  # grupos iguais nos dois regex: kw, ponte/sep, enumeração
+        kw, ponte, enum = m.group(1), m.group(2), m.group(3)
+        return f"{kw}{ponte}{_RE_NUM_DOC.sub(lambda x: _falar_documento(x.group(0)), enum)}"
 
-    return _RE_DOC.sub(_seguro(repl), texto)
+    s = _RE_DOC_LISTA.sub(_seguro(repl), texto)  # enumeração (2+), colada ou com ponte na frase
+    return _RE_DOC.sub(_seguro(repl), s)  # número único colado à palavra-chave (S19a)
 
 
 def _converter_valores(texto: str) -> str:
